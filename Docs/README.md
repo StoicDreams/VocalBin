@@ -1,5 +1,7 @@
 # Vocal Bin
 
+[WebUI Version: 0.6.45](https://github.com/StoicDreams/RustWebUI)
+
 Text to speech engine.
 
 ## Ideas
