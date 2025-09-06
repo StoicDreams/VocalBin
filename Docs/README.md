@@ -1,8 +1,8 @@
 # Vocal Bin
 
-[Version: 0.1.3](https://github.com/StoicDreams/VocalBin)
+[Version: 0.1.4](https://github.com/StoicDreams/VocalBin)
 
-[WebUI Version: 0.11.3](https://github.com/StoicDreams/WebUI)
+[WebUI](https://github.com/StoicDreams/WebUI)
 
 Text to speech engine.
 
