@@ -1,6 +1,6 @@
 # Vocal Bin
 
-[Version: 0.1.6](https://github.com/StoicDreams/VocalBin)
+[Version: 0.1.7](https://github.com/StoicDreams/VocalBin)
 
 [WebUI](https://github.com/StoicDreams/WebUI)
 
