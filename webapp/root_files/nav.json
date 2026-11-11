@@ -8,5 +8,10 @@
         "name": "Vowel Lab",
         "icon": "microphone",
         "url": "/vowel-lab"
+    },
+    {
+        "name": "Phoneme Lab",
+        "icon": "music",
+        "url": "/phoneme-lab"
     }
 ]
