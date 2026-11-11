@@ -4,12 +4,16 @@
 //! - [`Voice`] makes the sound: an LF glottal source and aspiration through a cascade of formants, and frication
 //!   noise through parallel resonators.
 //! - Stage 1, [`Synth`]: one vowel at a time, gliding between them. The vowel lab runs it in an `AudioWorklet`.
-//! - Stage 2, [`Speaker`]: ARPAbet text, rendered ahead of playback in a Web Worker for the phoneme lab.
+//! - Stage 2, [`Speaker`]: phonemes in IPA or ARPAbet, rendered ahead of playback in a Web Worker for the phoneme lab.
+//! - Sounds are named in IPA. Each [`Language`] brings its own table of them, so adding a language means adding a
+//!   table like [`ENGLISH`], not changing the speaker.
 //!
 //! The pages load this crate as raw WebAssembly through the `vb_*` functions below, without wasm-bindgen.
 
+mod english;
 mod filter;
 mod glottal;
+mod language;
 mod phonemes;
 mod speaker;
 mod synth;
@@ -18,7 +22,9 @@ mod vowels;
 
 pub use filter::{Glide, Resonator};
 pub use glottal::LfPulse;
-pub use phonemes::{Kind, PHONEMES, ParseError, Phoneme, Token, parse};
+pub use english::{ARPABET, Arpabet, ENGLISH, parse_arpabet};
+pub use language::{Language, Notation};
+pub use phonemes::{Kind, ParseError, Phoneme, Place, Token};
 pub use speaker::{Item, Speaker};
 pub use synth::Synth;
 pub use voice::{Controls, Voice, param};
@@ -111,17 +117,19 @@ mod wasm {
         }
     }
 
-    /// Prepares the UTF-8 text at `text` to be rendered. Returns -1 when it reads, or else the byte offset of the
-    /// first thing it can't read, whose length `vb_speaker_error_len` then gives.
+    /// Prepares the UTF-8 text at `text` to be rendered, written in `notation` (0 ARPAbet, 1 IPA). Returns -1 when
+    /// it reads, or else the byte offset of the first thing it can't read, whose length `vb_speaker_error_len` then
+    /// gives.
     ///
     /// # Safety
     /// `speaker` must come from `vb_speaker_new`, and `text` must point to `len` bytes.
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn vb_speaker_speak(speaker: *mut Speaker, text: *const u8, len: u32) -> i32 {
+    pub unsafe extern "C" fn vb_speaker_speak(speaker: *mut Speaker, text: *const u8, len: u32, notation: u32) -> i32 {
         let Some(speaker) = (unsafe { speaker.as_mut() }) else { return 0 };
+        let Some(notation) = crate::Notation::from_number(notation) else { return 0 };
         let bytes = unsafe { std::slice::from_raw_parts(text, len as usize) };
         let Ok(text) = std::str::from_utf8(bytes) else { return 0 };
-        match speaker.speak(text) {
+        match speaker.speak(text, notation) {
             Ok(()) => {
                 ERROR_LEN.with(|e| e.set(0));
                 -1

@@ -1,10 +1,14 @@
-//! Stage 2: speaks ARPAbet. Each phoneme becomes one or more timed steps of [`Controls`], and the voice glides
-//! between them, so transitions come from the same spring-like motion as the vowel lab's glides.
+//! Stage 2: speaks phonemes, written in IPA or (for English) ARPAbet. Each phoneme becomes one or more timed steps of
+//! [`Controls`], and the voice glides between them, so transitions come from the same spring-like motion as the
+//! vowel lab's glides. Nothing here depends on the language: the sounds come from the language's table, and the
+//! steps from each sound's [`Kind`] and [`Place`].
 //!
 //! Intonation here is deliberately simple (stage 3 is prosody): pitch drifts down across a phrase, stressed vowels
 //! rise, and the phrase ends falling, or rising for `?`.
 
-use crate::phonemes::{AFFRICATE_BURST, AFFRICATE_NOISE, Kind, ParseError, Phoneme, SCHWA, Token, parse};
+use crate::english::{ENGLISH, parse_arpabet};
+use crate::language::{Language, Notation};
+use crate::phonemes::{Kind, NEUTRAL, ParseError, Phoneme, Place, Token, burst};
 use crate::voice::{Controls, Voice, param};
 
 /// One phoneme or pause in the rendered audio, and where it came from in the text (in bytes).
@@ -30,6 +34,7 @@ const FINAL_LENGTHENING: f32 = 1.3;
 
 pub struct Speaker {
     voice: Voice,
+    language: &'static Language,
     rate: f32,
     intonation: f32,
     steps: Vec<Step>,
@@ -44,6 +49,7 @@ impl Speaker {
     pub fn new(sample_rate: f32) -> Self {
         Speaker {
             voice: Voice::new(sample_rate),
+            language: &ENGLISH,
             rate: 1.0,
             intonation: 1.0,
             steps: Vec::new(),
@@ -67,10 +73,28 @@ impl Speaker {
         }
     }
 
+    /// The language IPA text is read in. English until another is set.
+    pub fn language(&self) -> &'static Language {
+        self.language
+    }
+
+    pub fn set_language(&mut self, language: &'static Language) {
+        self.language = language;
+    }
+
     /// Prepares `text` to be rendered from its start. On an error, nothing changes.
-    pub fn speak(&mut self, text: &str) -> Result<(), ParseError> {
-        let tokens = parse(text)?;
-        let (steps, items) = plan(&tokens, self.voice.sample_rate(), self.rate, self.intonation);
+    pub fn speak(&mut self, text: &str, notation: Notation) -> Result<(), ParseError> {
+        let tokens = match notation {
+            Notation::Ipa => self.language.parse_ipa(text)?,
+            Notation::Arpabet => parse_arpabet(text)?,
+        };
+        self.speak_tokens(&tokens);
+        Ok(())
+    }
+
+    /// Prepares phonemes that are already read, such as from a dictionary, to be rendered from their start.
+    pub fn speak_tokens(&mut self, tokens: &[Token]) {
+        let (steps, items) = plan(tokens, self.voice.sample_rate(), self.rate, self.intonation);
         self.length = steps.iter().map(|s| s.samples).sum();
         self.steps = steps;
         self.items = items;
@@ -80,7 +104,6 @@ impl Speaker {
             self.voice.set_controls(first.controls);
             self.voice.snap();
         }
-        Ok(())
     }
 
     /// The length of the text being spoken, in samples, including a short silence at each end.
@@ -143,13 +166,6 @@ struct Phone {
     len: usize,
 }
 
-impl Phone {
-    /// Where the formants start: unstressed `AH` is the neutral schwa.
-    fn start(&self) -> [f32; 3] {
-        if self.phoneme.symbol == "AH" && self.stress == 0 { SCHWA } else { self.phoneme.formants }
-    }
-}
-
 /// Builds the steps for a whole text, and the item for each phoneme and pause.
 fn plan(tokens: &[Token], sample_rate: f32, rate: f32, intonation: f32) -> (Vec<Step>, Vec<Item>) {
     let samples = |ms: f32| (ms.max(0.0) * sample_rate / 1000.0).round() as u32;
@@ -161,7 +177,7 @@ fn plan(tokens: &[Token], sample_rate: f32, rate: f32, intonation: f32) -> (Vec<
         Token::Phone { phoneme, .. } => Some(phoneme.formants),
         _ => None,
     });
-    let lead_in = Step { samples: samples(LEAD_IN_MS), controls: Controls { formants: first_formants.unwrap_or(SCHWA), ..Controls::SILENT } };
+    let lead_in = Step { samples: samples(LEAD_IN_MS), controls: Controls { formants: first_formants.unwrap_or(NEUTRAL), ..Controls::SILENT } };
     time += lead_in.samples;
     steps.push(lead_in);
 
@@ -189,7 +205,7 @@ fn plan(tokens: &[Token], sample_rate: f32, rate: f32, intonation: f32) -> (Vec<
         steps.extend(phrase_steps);
         if let Some(Token::Pause { mark, offset }) = tokens.get(end) {
             let ms = if *mark == ',' { COMMA_MS } else { SENTENCE_MS };
-            let last = steps.last().map_or(SCHWA, |s| s.controls.formants);
+            let last = steps.last().map_or(NEUTRAL, |s| s.controls.formants);
             let pause = Step { samples: samples(ms / rate.sqrt()), controls: Controls { formants: last, ..Controls::SILENT } };
             items.push(Item { start: time, end: time + pause.samples, offset: *offset as u32, len: 1 });
             time += pause.samples;
@@ -198,7 +214,7 @@ fn plan(tokens: &[Token], sample_rate: f32, rate: f32, intonation: f32) -> (Vec<
         start = end + 1;
     }
 
-    let last = steps.last().map_or(SCHWA, |s| s.controls.formants);
+    let last = steps.last().map_or(NEUTRAL, |s| s.controls.formants);
     steps.push(Step { samples: samples(TAIL_MS), controls: Controls { formants: last, ..Controls::SILENT } });
     (steps, items)
 }
@@ -256,8 +272,8 @@ fn speak_phrase(
         let closure_ms = |ms: f32| ms / rate.powf(0.7);
         let next = phones.get(i + 1);
         // Where the formants head after a consonant: the next sound's start, or a neutral vowel.
-        let next_formants = next.map_or(SCHWA, |n| n.start());
-        let after_vowel = next_vowel(i).map_or(SCHWA, |n| n.start());
+        let next_formants = next.map_or(NEUTRAL, |n| n.phoneme.formants);
+        let after_vowel = next_vowel(i).map_or(NEUTRAL, |n| n.phoneme.formants);
         let base = Controls { formants: p.formants, pitch_scale: pitch[i], ..Controls::SILENT };
         let from = time;
         let mut push = |ms: f32, controls: Controls, steps: &mut Vec<Step>| {
@@ -281,7 +297,7 @@ fn speak_phrase(
                     Some(Kind::Vowel | Kind::Diphthong) => 90.0,
                     None => 40.0,
                 };
-                let vowel = Controls { formants: phone.start(), glide_ms, voicing: 1.0, ..base };
+                let vowel = Controls { formants: p.formants, glide_ms, voicing: 1.0, ..base };
                 if p.kind == Kind::Diphthong {
                     push(ms * 0.4, vowel, steps);
                     push(ms * 0.6, Controls { formants: p.end, glide_ms: ms * 0.6, ..vowel }, steps);
@@ -299,7 +315,7 @@ fn speak_phrase(
             }
             Kind::Plosive | Kind::Affricate => {
                 let mut locus = p.formants;
-                if matches!(p.symbol, "K" | "G") {
+                if p.place == Place::Velar {
                     // The tongue back meets the palate where the next vowel needs it: further forward before front
                     // vowels. F2 and F3 come together there (the velar pinch).
                     locus[1] = (after_vowel[1] + 150.0).clamp(1300.0, 2400.0);
@@ -307,13 +323,12 @@ fn speak_phrase(
                 }
                 let closure = Controls { formants: locus, glide_ms: 35.0, voicing: if p.voiced { 0.12 } else { 0.0 }, ..base };
                 push(closure_ms(p.ms), closure, steps);
-                let burst = if p.kind == Kind::Affricate { AFFRICATE_BURST } else { p.noise };
-                let burst_ms = if matches!(p.symbol, "K" | "G") { 15.0 } else { 10.0 };
-                push(burst_ms, Controls { formants: locus, glide_ms: 35.0, frication: burst, ..base }, steps);
+                let burst_ms = if p.place == Place::Velar { 15.0 } else { 10.0 };
+                push(burst_ms, Controls { formants: locus, glide_ms: 35.0, frication: burst(p.place), ..base }, steps);
                 if p.kind == Kind::Affricate {
                     let voicing = if p.voiced { 0.3 } else { 0.0 };
                     let level = if p.voiced { 0.6 } else { 1.0 };
-                    let hiss = Controls { formants: locus, glide_ms: 45.0, voicing, frication: AFFRICATE_NOISE.map(|n| n * level), ..base };
+                    let hiss = Controls { formants: locus, glide_ms: 45.0, voicing, frication: p.noise.map(|n| n * level), ..base };
                     push(sonorant_ms(p.release_ms), hiss, steps);
                 } else {
                     let vot_ms = p.release_ms / rate.sqrt();
@@ -335,13 +350,21 @@ mod tests {
 
     const SR: f32 = 44_100.0;
 
-    fn spoken(text: &str) -> (Speaker, Vec<f32>) {
+    fn spoken_in(text: &str, notation: Notation) -> (Speaker, Vec<f32>) {
         let mut s = Speaker::new(SR);
         s.set(param::ROUGHNESS, 0.0);
-        s.speak(text).unwrap();
+        s.speak(text, notation).unwrap();
         let mut out = vec![0.0; s.length() as usize];
         s.render(&mut out);
         (s, out)
+    }
+
+    fn spoken(text: &str) -> (Speaker, Vec<f32>) {
+        spoken_in(text, Notation::Arpabet)
+    }
+
+    fn spoken_ipa(text: &str) -> (Speaker, Vec<f32>) {
+        spoken_in(text, Notation::Ipa)
     }
 
     fn rms(samples: &[f32]) -> f32 {
@@ -373,11 +396,11 @@ mod tests {
 
     #[test]
     fn every_phoneme_renders_in_range() {
-        for p in &crate::PHONEMES {
-            let text = format!("AA1 {} AA1 .", p.symbol);
-            let (_, out) = spoken(&text);
-            assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 1.0), "{}", p.symbol);
-            assert!(rms(&out) > 0.01, "{} is silent", p.symbol);
+        for p in ENGLISH.phonemes {
+            let text = format!("ˈɑ {} ˈɑ .", p.ipa);
+            let (_, out) = spoken_ipa(&text);
+            assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 1.0), "{}", p.ipa);
+            assert!(rms(&out) > 0.01, "{} is silent", p.ipa);
         }
     }
 
@@ -406,10 +429,10 @@ mod tests {
     fn speaking_faster_takes_less_time() {
         let text = "S P IY1 CH , S IH1 N TH AH0 S AH0 S .";
         let mut slow = Speaker::new(SR);
-        slow.speak(text).unwrap();
+        slow.speak(text, Notation::Arpabet).unwrap();
         let mut fast = Speaker::new(SR);
         fast.set(param::RATE, 2.0);
-        fast.speak(text).unwrap();
+        fast.speak(text, Notation::Arpabet).unwrap();
         let ratio = fast.length() as f32 / slow.length() as f32;
         assert!((0.45..0.7).contains(&ratio), "fast is {ratio} of normal");
     }
@@ -435,7 +458,7 @@ mod tests {
     #[test]
     fn voiceless_closures_are_silent_and_bursts_are_not() {
         let mut s = Speaker::new(SR);
-        s.speak("AA1 T AA1 .").unwrap();
+        s.speak("AA1 T AA1 .", Notation::Arpabet).unwrap();
         let mut out = vec![0.0; s.length() as usize];
         s.render(&mut out);
         let t = s.items()[1];
@@ -460,7 +483,7 @@ mod tests {
     #[test]
     fn diphthongs_move_between_targets() {
         let mut s = Speaker::new(SR);
-        s.speak("AY1 .").unwrap();
+        s.speak("AY1 .", Notation::Arpabet).unwrap();
         let ay = s.items()[0];
         let mut out = vec![0.0; (ay.start + (ay.end - ay.start) / 4) as usize];
         s.render(&mut out);
@@ -473,9 +496,9 @@ mod tests {
     #[test]
     fn velars_meet_the_vowel_that_follows() {
         let mut front = Speaker::new(SR);
-        front.speak("K IY1").unwrap();
+        front.speak("K IY1", Notation::Arpabet).unwrap();
         let mut back = Speaker::new(SR);
-        back.speak("K UW1").unwrap();
+        back.speak("K UW1", Notation::Arpabet).unwrap();
         let mut out = vec![0.0; (60.0 * SR / 1000.0) as usize];
         front.render(&mut out);
         back.render(&mut out);
@@ -486,7 +509,7 @@ mod tests {
     fn questions_rise_and_statements_fall() {
         let end_pitch = |text: &str| {
             let mut s = Speaker::new(SR);
-            s.speak(text).unwrap();
+            s.speak(text, Notation::Arpabet).unwrap();
             let last = s.items()[1];
             let mut out = vec![0.0; last.end as usize];
             s.render(&mut out);
@@ -501,7 +524,7 @@ mod tests {
     fn monotone_with_no_intonation() {
         let mut s = Speaker::new(SR);
         s.set(param::INTONATION, 0.0);
-        s.speak("HH AW1 AA1 R Y UW1 ?").unwrap();
+        s.speak("HH AW1 AA1 R Y UW1 ?", Notation::Arpabet).unwrap();
         let mut out = vec![0.0; s.length() as usize];
         let mut highest = 0.0_f32;
         let mut lowest = f32::MAX;
@@ -516,9 +539,9 @@ mod tests {
     #[test]
     fn parse_errors_change_nothing() {
         let mut s = Speaker::new(SR);
-        s.speak("B IY1").unwrap();
+        s.speak("B IY1", Notation::Arpabet).unwrap();
         let length = s.length();
-        assert_eq!(s.speak("B QQ1"), Err(ParseError { offset: 2, len: 3 }));
+        assert_eq!(s.speak("B QQ1", Notation::Arpabet), Err(ParseError { offset: 2, len: 3 }));
         assert_eq!(s.length(), length);
     }
 
@@ -527,6 +550,11 @@ mod tests {
         let (s, out) = spoken("");
         assert!(s.items().is_empty());
         assert!(s.length() > 0 && rms(&out) < 1e-4);
+    }
+
+    #[test]
+    fn ipa_and_arpabet_sound_the_same() {
+        assert_eq!(spoken("HH AH0 L OW1 , W ER1 L D .").1, spoken_ipa("həˈloʊ, ˈwɝld.").1);
     }
 
     #[test]

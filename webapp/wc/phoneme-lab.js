@@ -10,7 +10,7 @@
 {
     // Parameter numbers, the same as vocal_synth::param in synth/src/voice.rs.
     const PARAM = { pitch: 0, tract: 1, rd: 2, breath: 3, roughness: 4, volume: 7, rate: 10, intonation: 11 };
-    // The same phonemes as PHONEMES in synth/src/phonemes.rs: symbol, IPA, example word.
+    // The same phonemes as ARPABET in synth/src/english.rs: symbol, IPA, example word.
     const VOWELS = [
         ['AA', 'ɑ', 'odd'], ['AE', 'æ', 'at'], ['AH', 'ʌ', 'hut'], ['AO', 'ɔ', 'ought'], ['AW', 'aʊ', 'cow'],
         ['AY', 'aɪ', 'hide'], ['EH', 'ɛ', 'Ed'], ['ER', 'ɝ', 'hurt'], ['EY', 'eɪ', 'ate'], ['IH', 'ɪ', 'it'],

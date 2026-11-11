@@ -1,6 +1,6 @@
 /*!
  * Vocal Bin Speaker Worker
- * Renders ARPAbet text with the Rust speech synthesizer (vocal-synth.wasm), off the page's main thread.
+ * Renders ARPAbet or IPA text with the Rust speech synthesizer (vocal-synth.wasm), off the page's main thread.
  * Authored by Erik Gassler - Stoic Dreams
  * Copyright © 2026 Stoic Dreams - https://www.stoicdreams.com
  * Licensed under the MIT license - https://github.com/StoicDreams/MyFiCDN/blob/main/LICENSE
@@ -9,6 +9,8 @@
 {
     const BLOCK = 8192;
     let wasm = null;
+    // The notation numbers vb_speaker_speak takes.
+    const NOTATIONS = { arpabet: 0, ipa: 1 };
 
     /** Copies UTF-8 text into wasm memory and runs `use` with its pointer and length. */
     function withText(text, use) {
@@ -34,7 +36,7 @@
                 wasm.vb_speaker_set(speaker, id, value);
             }
             const error = withText(job.text, (pointer, length, bytes) => {
-                const at = wasm.vb_speaker_speak(speaker, pointer, length);
+                const at = wasm.vb_speaker_speak(speaker, pointer, length, NOTATIONS[job.notation] ?? NOTATIONS.arpabet);
                 if (at < 0) return null;
                 const end = at + wasm.vb_speaker_error_len();
                 return { start: charIndex(bytes, at), end: charIndex(bytes, end) };
