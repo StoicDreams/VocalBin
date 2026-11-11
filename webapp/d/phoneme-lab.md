@@ -1,6 +1,6 @@
 <webui-data data-page-title="Phoneme Lab" data-page-subtitle="Speech from sounds"></webui-data>
 
-The second stage of our speech synthesizer speaks whole words, one sound at a time. Write them in ARPAbet, the phoneme alphabet of the CMU Pronouncing Dictionary, and our synthesizer builds every sound from scratch, with no recordings and no AI. Pick an example to start, or open the phoneme chart.
+The second stage of our speech synthesizer speaks whole words, one sound at a time. Write them in ARPAbet, the phoneme alphabet of the CMU Pronouncing Dictionary, or in IPA, the International Phonetic Alphabet used in dictionaries and linguistics. Our synthesizer builds every sound from scratch, with no recordings and no AI. Pick an example to start, or open the phoneme chart.
 
 <app-phoneme-lab></app-phoneme-lab>
 

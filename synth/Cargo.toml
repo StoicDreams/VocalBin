@@ -1,6 +1,6 @@
 [package]
 name = "vocal-synth"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2024"
 description = "Vocal Bin's classic speech synthesizer: a glottal source and formant filters, with no recordings or AI models"
 license = "MIT"

@@ -153,3 +153,56 @@ test('turning loop off lets the current pass finish', async ({ page }) => {
     await lab(page).getByRole('button', { name: 'Loop' }).click();
     await expect(speak).toHaveText('Speak', { timeout: 5000 });
 });
+
+const ipaText = page => lab(page).getByRole('textbox', { name: 'Phonemes (IPA)' });
+const notation = (page, name) => lab(page).getByRole('group', { name: 'Notation' }).getByRole('button', { name });
+
+test('IPA and ARPAbet each keep their own text', async ({ page }) => {
+    await notation(page, 'IPA').click();
+    await expect(notation(page, 'IPA')).toHaveAttribute('aria-pressed', 'true');
+    await expect(notation(page, 'ARPAbet')).toHaveAttribute('aria-pressed', 'false');
+    await expect(ipaText(page)).toHaveValue('həˈloʊ, ˈwɝld.');
+    await ipaText(page).fill('ˈbi.');
+    await notation(page, 'ARPAbet').click();
+    await expect(text(page)).toHaveValue('HH AH0 L OW1 , W ER1 L D .');
+    await notation(page, 'IPA').click();
+    await expect(ipaText(page)).toHaveValue('ˈbi.');
+    await lab(page).getByRole('button', { name: 'How are you?' }).click();
+    await expect(ipaText(page)).toHaveValue('ˈhaʊ ˈɑɹ ˈju?');
+});
+
+test('IPA examples sound the same as their ARPAbet', async ({ page }) => {
+    for (const example of ['Hello, world.', 'She sells sea shells.']) {
+        await notation(page, 'ARPAbet').click();
+        await lab(page).getByRole('button', { name: example }).click();
+        const arpabet = await saveWav(page);
+        await notation(page, 'IPA').click();
+        await lab(page).getByRole('button', { name: example }).click();
+        const ipa = await saveWav(page);
+        expect(ipa.samples.length, example).toBe(arpabet.samples.length);
+        expect(ipa.samples.every((s, i) => s === arpabet.samples[i]), example).toBe(true);
+    }
+    await expect(lab(page).locator('.timeline span').first()).toHaveText('ʃ');
+});
+
+test('the IPA chart adds sounds and stress marks with no spaces', async ({ page }) => {
+    await notation(page, 'IPA').click();
+    await ipaText(page).fill('');
+    await lab(page).getByText('Phoneme chart').click();
+    await expect(lab(page).getByRole('button', { name: 'AY, aɪ as in hide' })).toHaveCount(0);
+    for (const name of ['h as in he', 'ə as in about', 'Primary stress, before the stressed syllable', 'l as in lee', 'oʊ as in oat']) {
+        await lab(page).getByRole('button', { name, exact: true }).click();
+    }
+    await expect(ipaText(page)).toHaveValue('həˈloʊ');
+    await notation(page, 'ARPAbet').click();
+    await expect(lab(page).getByRole('button', { name: 'ə as in about' })).toBeHidden();
+    await expect(lab(page).getByRole('button', { name: 'AY, aɪ as in hide' })).toBeVisible();
+});
+
+test('IPA points out a sound it does not know', async ({ page }) => {
+    await notation(page, 'IPA').click();
+    await ipaText(page).fill('ˈbʌʔn');
+    await lab(page).getByRole('button', { name: 'Save WAV' }).click();
+    await expect(status(page)).toHaveText(/^“ʔ” isn't a sound this English voice knows/);
+    await expect(ipaText(page)).toHaveAttribute('aria-invalid', 'true');
+});

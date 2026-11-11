@@ -1,6 +1,6 @@
 /*!
  * Vocal Bin Phoneme Lab
- * Stage 2 of the Vocal Bin speech synthesizer: type ARPAbet, hear it spoken, and save it as a WAV file.
+ * Stage 2 of the Vocal Bin speech synthesizer: type phonemes in ARPAbet or IPA, hear them spoken, and save a WAV file.
  * The sound comes from synth/ (Rust, compiled to vocal-synth.wasm), rendered in a Web Worker.
  * Authored by Erik Gassler - Stoic Dreams
  * Copyright © 2026 Stoic Dreams - https://www.stoicdreams.com
@@ -23,13 +23,32 @@
         ['S', 's', 'sea'], ['SH', 'ʃ', 'she'], ['T', 't', 'tea'], ['TH', 'θ', 'theta'], ['V', 'v', 'vee'],
         ['W', 'w', 'we'], ['Y', 'j', 'yield'], ['Z', 'z', 'zee'], ['ZH', 'ʒ', 'seizure'],
     ];
+    // Sounds only IPA writes as their own symbols (ARPAbet writes them AH0 and ER0), and IPA's marks.
+    const IPA_ONLY = [['ə', 'ə as in about'], ['ɚ', 'ɚ as in butter'], ['ˈ', 'Primary stress, before the stressed syllable'], ['ˌ', 'Secondary stress']];
+    // Each example in ARPAbet and in IPA. Both must sound the same.
     const EXAMPLES = [
-        ['Hello, world.', 'HH AH0 L OW1 , W ER1 L D .'],
-        ['How are you?', 'HH AW1 AA1 R Y UW1 ?'],
-        ['Speech synthesis.', 'S P IY1 CH , S IH1 N TH AH0 S AH0 S .'],
-        ['Vocal Bin.', 'V OW1 K AH0 L , B IH1 N .'],
-        ['She sells sea shells.', 'SH IY1 S EH1 L Z S IY1 SH EH1 L Z .'],
+        ['Hello, world.', 'HH AH0 L OW1 , W ER1 L D .', 'həˈloʊ, ˈwɝld.'],
+        ['How are you?', 'HH AW1 AA1 R Y UW1 ?', 'ˈhaʊ ˈɑɹ ˈju?'],
+        ['Speech synthesis.', 'S P IY1 CH , S IH1 N TH AH0 S AH0 S .', 'ˈspitʃ, ˈsɪnθəsəs.'],
+        ['Vocal Bin.', 'V OW1 K AH0 L , B IH1 N .', 'ˈvoʊkəl, ˈbɪn.'],
+        ['She sells sea shells.', 'SH IY1 S EH1 L Z S IY1 SH EH1 L Z .', 'ʃi sɛlz si ʃɛlz.'],
     ];
+    const NOTATIONS = {
+        arpabet: {
+            label: 'Phonemes (ARPAbet)',
+            capitalize: 'characters',
+            hint: 'Separate phonemes with spaces. Vowels take a stress number: 1 stressed, 2 secondary, 0 unstressed. A comma pauses, and a period or question mark ends a sentence. Ctrl+Enter speaks. Loop repeats the speech and picks up your changes on each pass.',
+            chartHint: 'Each button adds its phoneme at the cursor. Vowels are added stressed.',
+            error: bad => `“${bad}” isn't an ARPAbet phoneme. Vowels take a stress number (0, 1, or 2), and consonants take none.`,
+        },
+        ipa: {
+            label: 'Phonemes (IPA)',
+            capitalize: 'off',
+            hint: 'Write each word without spaces between its sounds. Put ˈ (or \') before the stressed syllable and ˌ before a secondary one. A word with no marks stresses its first full vowel. Slashes, brackets, and length marks are fine. A comma pauses, and a period or question mark ends a sentence. Ctrl+Enter speaks. Loop repeats the speech and picks up your changes on each pass.',
+            chartHint: 'Each button adds its sound or mark at the cursor, with no spaces. Add a space between words.',
+            error: bad => `“${bad}” isn't a sound this English voice knows. The chart shows the IPA it reads.`,
+        },
+    };
     const percent = v => `${Math.round(v * 100)}%`;
     const quality = v => `${v < 0.8 ? 'pressed' : v > 1.6 ? 'lax' : 'modal'} (${v.toFixed(2)})`;
     const SLIDERS = [
@@ -126,7 +145,10 @@
     }
 
     const chartButtons = (list, vowel) => list.map(([symbol, ipa, word]) =>
-        `<button type="button" data-symbol="${symbol}${vowel ? '1' : ''}" aria-label="${symbol}, ${ipa} as in ${word}" title="${ipa} as in ${word}"><span class="sym">${symbol}</span><span class="ipa">${ipa}</span></button>`
+        `<button type="button" data-symbol="${symbol}${vowel ? '1' : ''}" data-ipa="${ipa}" data-word="${word}" aria-label="${symbol}, ${ipa} as in ${word}" title="${ipa} as in ${word}"><span class="sym">${symbol}</span><span class="ipa">${ipa}</span></button>`
+    ).join('');
+    const ipaOnlyButtons = IPA_ONLY.map(([ipa, name]) =>
+        `<button type="button" class="ipa-only" data-ipa="${ipa}" aria-label="${name}" title="${name}" hidden><span class="ipa">${ipa}</span></button>`
     ).join('');
     const exampleButtons = EXAMPLES.map(([label], i) => `<button type="button" data-example="${i}">${label}</button>`).join('');
     const presetButtons = Object.keys(PRESETS).map(name => `<button type="button" data-preset="${name}">${name}</button>`).join('');
@@ -138,13 +160,25 @@
         constructor() {
             const t = this;
             t._values = {};
+            t._notation = 'arpabet';
+            t._texts = { arpabet: EXAMPLES[0][1], ipa: EXAMPLES[0][2] };
             t._text = t.template.querySelector('textarea');
+            t._textLabel = t.template.querySelector('.text span');
+            t._hint = t.template.querySelector('#hint');
+            t._chartHint = t.template.querySelector('.chart .hint');
+            // t.template is emptied once it moves into the shadow root, so find everything needed later now.
+            t._notationButtons = [...t.template.querySelectorAll('[data-notation]')];
+            t._chartSymbols = [...t.template.querySelectorAll('.chart [data-symbol]')];
+            t._ipaOnly = [...t.template.querySelectorAll('.ipa-only')];
+            t._notationButtons.forEach(button => {
+                button.addEventListener('click', () => t.setNotation(button.dataset.notation));
+            });
             t._speak = t.template.querySelector('.speak');
             t._save = t.template.querySelector('.save');
             t._status = t.template.querySelector('.status');
             t._timeline = t.template.querySelector('.timeline');
             t._inputs = [...t.template.querySelectorAll('input[type=range]')];
-            t._text.value = EXAMPLES[0][1];
+            t._text.value = t._texts.arpabet;
             t._loop = t.template.querySelector('.loop');
             t._inputs.forEach(input => {
                 t.showValue(input);
@@ -167,12 +201,15 @@
                     t.toggleSpeak();
                 }
             });
-            t.template.querySelectorAll('[data-symbol]').forEach(button => {
-                button.addEventListener('click', () => t.insert(button.dataset.symbol));
+            t.template.querySelectorAll('.chart button').forEach(button => {
+                button.addEventListener('click', () => {
+                    if (t._notation === 'ipa') t.insertIpa(button.dataset.ipa);
+                    else t.insert(button.dataset.symbol);
+                });
             });
             t.template.querySelectorAll('[data-example]').forEach(button => {
                 button.addEventListener('click', () => {
-                    t._text.value = EXAMPLES[Number(button.dataset.example)][1];
+                    t._text.value = EXAMPLES[Number(button.dataset.example)][t._notation === 'ipa' ? 2 : 1];
                     t._text.removeAttribute('aria-invalid');
                     t.prepareNextLoop();
                 });
@@ -221,6 +258,44 @@
             const sampleRate = t._ctx.sampleRate;
             t._prepareTimer = setTimeout(() => t.render(sampleRate, true), 150);
         },
+        /**
+         * Switches between ARPAbet and IPA. Each notation keeps its own text, so switching back finds it as it was.
+         */
+        setNotation(notation) {
+            const t = this;
+            if (!(notation in NOTATIONS) || notation === t._notation) return;
+            t._texts[t._notation] = t._text.value;
+            t._notation = notation;
+            const ipa = notation === 'ipa';
+            const about = NOTATIONS[notation];
+            t._notationButtons.forEach(button => {
+                button.setAttribute('aria-pressed', String(button.dataset.notation === notation));
+            });
+            t._text.value = t._texts[notation];
+            t._text.removeAttribute('aria-invalid');
+            t._text.setAttribute('autocapitalize', about.capitalize);
+            t._textLabel.textContent = about.label;
+            t._hint.textContent = about.hint;
+            t._chartHint.textContent = about.chartHint;
+            t._chartSymbols.forEach(button => {
+                const { symbol, ipa: sound, word } = button.dataset;
+                button.setAttribute('aria-label', ipa ? `${sound} as in ${word}` : `${symbol.replace(/1$/, '')}, ${sound} as in ${word}`);
+                button.querySelector('.sym').hidden = ipa;
+            });
+            t._ipaOnly.forEach(element => { element.hidden = !ipa; });
+            t.prepareNextLoop();
+        },
+        /** Inserts IPA at the cursor as it is. Sounds in a word need no spaces. */
+        insertIpa(symbol) {
+            const t = this;
+            const text = t._text.value;
+            const start = t._text.selectionStart ?? text.length;
+            const end = t._text.selectionEnd ?? text.length;
+            t._text.value = `${text.slice(0, start)}${symbol}${text.slice(end)}`;
+            const cursor = start + symbol.length;
+            t._text.setSelectionRange(cursor, cursor);
+            t._text.removeAttribute('aria-invalid');
+        },
         /** Inserts a phoneme at the cursor, with spaces around it. */
         insert(symbol) {
             const t = this;
@@ -243,15 +318,16 @@
         async render(sampleRate, quiet = false) {
             const t = this;
             const text = t._text.value;
+            const notation = t._notation;
             if (!text.trim()) {
                 if (!quiet) t._status.textContent = 'Type some phonemes first, or pick an example.';
                 return null;
             }
             const settings = Object.keys(PARAM).map(key => [PARAM[key], t._values[key]]);
-            const key = JSON.stringify([text, settings, sampleRate]);
+            const key = JSON.stringify([text, notation, settings, sampleRate]);
             if (t._rendered?.key !== key) {
                 if (t._pending?.key !== key) {
-                    t._pending = { key, job: renderInWorker({ text, settings, sampleRate }) };
+                    t._pending = { key, job: renderInWorker({ text, notation, settings, sampleRate }) };
                 }
                 const pending = t._pending;
                 if (!quiet) t._status.textContent = 'Rendering…';
@@ -266,7 +342,7 @@
                     if (t._pending === pending) t._pending = null;
                 }
                 if (result.parseError) {
-                    return quiet ? null : t.showParseError(text, result.parseError);
+                    return quiet ? null : t.showParseError(text, notation, result.parseError);
                 }
                 // A newer render may have finished while this one waited.
                 if (t._rendered?.key !== key) t._rendered = { key, text, ...result };
@@ -278,16 +354,18 @@
                 t.showTimeline(rendered);
             }
             const seconds = (rendered.samples.length / rendered.sampleRate).toFixed(1);
-            const count = rendered.items.filter(item => !/^[,.!?]$/.test(rendered.text.slice(item.from, item.to))).length;
+            const count = rendered.items.filter(item => !/^[,.!?|‖]$/.test(rendered.text.slice(item.from, item.to))).length;
             t._status.textContent = `${count} phonemes, ${seconds} seconds.`;
             return rendered;
         },
-        /** Selects the text that isn't ARPAbet and explains why. Returns null, for render to pass on. */
-        showParseError(text, { start, end }) {
+        /** Selects the text that can't be read and explains why. Returns null, for render to pass on. */
+        showParseError(text, notation, { start, end }) {
             const t = this;
+            // The text box may have changed to the other notation while this rendered.
+            if (notation !== t._notation || t._text.value !== text) return null;
             t._text.setAttribute('aria-invalid', 'true');
             t._text.setSelectionRange(start, end);
-            t._status.textContent = `“${text.slice(start, end)}” isn't an ARPAbet phoneme. Vowels take a stress number (0, 1, or 2), and consonants take none.`;
+            t._status.textContent = NOTATIONS[notation].error(text.slice(start, end));
             return null;
         },
         showTimeline(rendered) {
@@ -398,6 +476,7 @@
             t._speak.setAttribute('aria-pressed', 'false');
         },
         shadowTemplate: `
+<div class="row notation" role="group" aria-label="Notation"><span>Write in</span><button type="button" data-notation="arpabet" aria-pressed="true">ARPAbet</button><button type="button" data-notation="ipa" aria-pressed="false">IPA</button></div>
 <label class="text"><span>Phonemes (ARPAbet)</span><textarea rows="3" maxlength="4000" spellcheck="false" autocapitalize="characters" aria-describedby="hint"></textarea></label>
 <p id="hint" class="hint">Separate phonemes with spaces. Vowels take a stress number: 1 stressed, 2 secondary, 0 unstressed. A comma pauses, and a period or question mark ends a sentence. Ctrl+Enter speaks. Loop repeats the speech and picks up your changes on each pass.</p>
 <div class="row examples" role="group" aria-label="Examples">${exampleButtons}</div>
@@ -413,6 +492,7 @@
 <p class="hint">Each button adds its phoneme at the cursor. Vowels are added stressed.</p>
 <fieldset><legend>Vowels</legend>${chartButtons(VOWELS, true)}</fieldset>
 <fieldset><legend>Consonants</legend>${chartButtons(CONSONANTS, false)}</fieldset>
+<fieldset class="ipa-only" hidden><legend>Reduced vowels and stress</legend>${ipaOnlyButtons}</fieldset>
 </details>
 <fieldset class="presets"><legend>Voice</legend>${presetButtons}</fieldset>
 <fieldset class="sliders"><legend>Shape the voice</legend>${sliders}</fieldset>
@@ -475,6 +555,12 @@ textarea:focus-visible,
 summary:focus-visible {
 outline:2px solid var(--color-focus, currentColor);
 outline-offset:2px;
+}
+[hidden] {
+display:none !important;
+}
+.notation button {
+padding:0.3em 0.9em;
 }
 .examples button {
 padding:0.3em 0.7em;
