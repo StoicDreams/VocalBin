@@ -40,8 +40,8 @@ const RULES: &[Rule] = &[
     (" ", "DO", " ", "D UW"), (" ", "DOES", "", "D AH Z"), (" ", "DOING", "", "D UW IH NG"), (" ", "DOW", "", "D AW"),
     ("", "DU", "A", "JH UW"), ("", "DGE", "", "JH"), ("", "DD", "", "D"), ("", "D", "", "D"),
     // E
-    ("#:", "E", " ", ""), ("'^:", "E", " ", ""), (" :", "E", " ", "IY"), ("#", "ED", " ", "D"), ("#:", "E", "D ", ""),
-    ("", "EV", "ER", "EH V"), ("", "E", "^%", "IY"), ("", "ERI", "#", "IY R IY"), ("", "ERI", "", "EH R IH"),
+    ("#:", "E", " ", ""), ("'^:", "E", " ", ""), ("Y^", "E", " ", ""), (" :", "E", " ", "IY"), ("#", "ED", " ", "D"), ("#:", "E", "D ", ""),
+    ("", "EV", "ER", "EH V"), ("", "E", "^%", "IY"), ("", "ER", "IZ", "ER"), ("", "ERI", "#", "IY R IY"), ("", "ERI", "", "EH R IH"),
     ("#:", "ER", "#", "ER"), ("", "ER", "#", "EH R"), ("", "ER", "", "ER"), (" ", "EVEN", "", "IY V EH N"),
     ("#:", "E", "W", ""), ("@", "EW", "", "UW"), ("", "EW", "", "Y UW"), ("", "E", "O", "IY"), ("#:&", "ES", " ", "IH Z"),
     ("#:", "E", "S ", ""), ("#:", "ELY", " ", "L IY"), ("#:", "EMENT", "", "M EH N T"), ("", "EFUL", "", "F UH L"),
@@ -56,14 +56,15 @@ const RULES: &[Rule] = &[
     (" ", "GN", "", "N"), ("", "GN", " ", "N"), ("", "G", "", "G"),
     // H
     (" ", "HAV", "", "HH AE V"), (" ", "HERE", "", "HH IY R"), (" ", "HOUR", "", "AW ER"), ("", "HOW", "", "HH AW"),
-    ("", "H", "#", "HH"), ("", "H", "", ""),
+    ("", "H", "#", "HH"), ("", "H", "Y", "HH"), ("", "H", "", ""),
     // I
     (" ", "IN", "", "IH N"), (" ", "I", " ", "AY"), ("", "IN", "D", "AY N"), ("", "IER", "", "IY ER"), ("#:R", "IED", "", "IY D"),
     ("", "IED", " ", "AY D"), ("", "IEN", "", "IY EH N"), ("", "IE", "T", "AY EH"), (" :", "I", "%", "AY"), ("", "I", "%", "IY"),
     ("", "IE", "", "IY"), ("", "I", "^+:#", "IH"), ("", "IR", "#", "AY R"), ("", "IZ", "%", "AY Z"), ("", "IS", "%", "AY Z"),
     ("", "I", "D%", "AY"), ("+^", "I", "^+", "IH"), ("", "I", "T%", "AY"), ("#^:", "I", "^+", "IH"), ("", "I", "^+", "AY"),
     ("", "IR", "", "ER"), ("", "IGH", "", "AY"), ("", "ILD", "", "AY L D"), ("", "IGN", " ", "AY N"), ("", "IGN", "^", "AY N"),
-    ("", "IGN", "%", "AY N"), ("", "IQUE", "", "IY K"), ("", "I", "", "IH"),
+    ("", "IGN", "%", "AY N"), ("", "IQUE", "", "IY K"), ("#^:", "IFY", " ", "IH F AY"), ("#^:", "IFI", "ED ", "IH F AY"),
+    ("#^:", "IZE", "", "AY Z"), ("#^:", "I", " ", "IY"), ("", "I", "", "IH"),
     // J K
     ("", "J", "", "JH"), (" ", "K", "N", ""), ("", "KK", "", "K"), ("", "K", "", "K"),
     // L
@@ -111,7 +112,7 @@ const RULES: &[Rule] = &[
     ("", "U", "", "Y UW"),
     // V W X
     ("", "VIEW", "", "V Y UW"), ("", "VV", "", "V"), ("", "V", "", "V"),
-    (" ", "WERE", "", "W ER"), ("", "WA", "S", "W AA"), ("", "WA", "T", "W AA"), ("", "WHERE", "", "W EH R"),
+    (" ", "WERE", "", "W ER"), ("", "WA", "S", "W AA"), ("", "WA", "T", "W AA"), ("", "WA", "NT", "W AA"), ("", "WA", "ND", "W AA"), ("", "WHERE", "", "W EH R"),
     ("", "WHAT", "", "W AH T"), ("", "WHOL", "", "HH OW L"), ("", "WHO", "", "HH UW"), ("", "WH", "", "W"),
     ("", "WAR", "", "W AO R"), ("", "WOR", "^", "W ER"), ("", "WR", "", "R"), ("", "W", "", "W"),
     (" ", "X", "", "Z"), ("", "X", "", "K S"),
@@ -131,152 +132,138 @@ fn is_consonant(c: u8) -> bool {
     c.is_ascii_uppercase() && !is_vowel(c)
 }
 
-/// Whether the letters before `end` (exclusive) match `context`, read from its end backwards.
-fn left_matches(word: &[u8], end: usize, context: &str) -> bool {
-    let mut i = end as isize - 1;
-    let at = |i: isize| if i < 0 { b' ' } else { word[i as usize] };
-    for &symbol in context.as_bytes().iter().rev() {
-        match symbol {
-            b' ' => {
-                if at(i).is_ascii_uppercase() || at(i) == b'\'' {
-                    return false;
-                }
-                i -= 1;
-            }
-            b'#' => {
-                if !is_vowel(at(i)) {
-                    return false;
-                }
-                while is_vowel(at(i)) {
-                    i -= 1;
-                }
-            }
-            b':' => {
-                while is_consonant(at(i)) {
-                    i -= 1;
-                }
-            }
-            b'^' => {
-                if !is_consonant(at(i)) {
-                    return false;
-                }
-                i -= 1;
-            }
-            b'.' => {
-                if !matches!(at(i), b'B' | b'D' | b'G' | b'J' | b'L' | b'M' | b'N' | b'R' | b'V' | b'W' | b'Z') {
-                    return false;
-                }
-                i -= 1;
-            }
-            b'+' => {
-                if !matches!(at(i), b'E' | b'I' | b'Y') {
-                    return false;
-                }
-                i -= 1;
-            }
-            b'&' => {
-                if matches!(at(i), b'S' | b'C' | b'G' | b'Z' | b'X' | b'J') {
-                    i -= 1;
-                } else if at(i) == b'H' && matches!(at(i - 1), b'C' | b'S') {
-                    i -= 2;
-                } else {
-                    return false;
-                }
-            }
-            b'@' => {
-                if matches!(at(i), b'T' | b'S' | b'R' | b'D' | b'L' | b'Z' | b'N' | b'J') {
-                    i -= 1;
-                } else if at(i) == b'H' && matches!(at(i - 1), b'T' | b'C' | b'S') {
-                    i -= 2;
-                } else {
-                    return false;
-                }
-            }
-            letter => {
-                if at(i) != letter {
-                    return false;
-                }
-                i -= 1;
-            }
-        }
-    }
-    true
+fn is_voiced(c: u8) -> bool {
+    matches!(c, b'B' | b'D' | b'G' | b'J' | b'L' | b'M' | b'N' | b'R' | b'V' | b'W' | b'Z')
 }
 
-/// Whether the letters from `start` match `context`, read forwards.
+/// Whether the letters before `end` (exclusive) match `context`, read from its end backwards. `:` tries every
+/// number of consonants, so `#^:` matches "ss" in "lossy".
+fn left_matches(word: &[u8], end: usize, context: &str) -> bool {
+    left_from(word, end as isize - 1, context.as_bytes())
+}
+
+fn left_from(word: &[u8], mut i: isize, context: &[u8]) -> bool {
+    let at = |i: isize| if i < 0 { b' ' } else { word[i as usize] };
+    let Some((&symbol, rest)) = context.split_last() else { return true };
+    match symbol {
+        b' ' => {
+            if at(i).is_ascii_uppercase() || at(i) == b'\'' {
+                return false;
+            }
+            i -= 1;
+        }
+        b'#' => {
+            if !is_vowel(at(i)) {
+                return false;
+            }
+            while is_vowel(at(i)) {
+                i -= 1;
+            }
+        }
+        b':' => loop {
+            if left_from(word, i, rest) {
+                return true;
+            }
+            if !is_consonant(at(i)) {
+                return false;
+            }
+            i -= 1;
+        },
+        b'^' if !is_consonant(at(i)) => return false,
+        b'.' if !is_voiced(at(i)) => return false,
+        b'+' if !matches!(at(i), b'E' | b'I' | b'Y') => return false,
+        b'^' | b'.' | b'+' => i -= 1,
+        b'&' => {
+            if matches!(at(i), b'S' | b'C' | b'G' | b'Z' | b'X' | b'J') {
+                i -= 1;
+            } else if at(i) == b'H' && matches!(at(i - 1), b'C' | b'S') {
+                i -= 2;
+            } else {
+                return false;
+            }
+        }
+        b'@' => {
+            if matches!(at(i), b'T' | b'S' | b'R' | b'D' | b'L' | b'Z' | b'N' | b'J') {
+                i -= 1;
+            } else if at(i) == b'H' && matches!(at(i - 1), b'T' | b'C' | b'S') {
+                i -= 2;
+            } else {
+                return false;
+            }
+        }
+        letter => {
+            if at(i) != letter {
+                return false;
+            }
+            i -= 1;
+        }
+    }
+    left_from(word, i, rest)
+}
+
+/// Whether the letters from `start` match `context`, read forwards. `:` tries every number of consonants.
 fn right_matches(word: &[u8], start: usize, context: &str) -> bool {
-    let mut i = start;
+    right_from(word, start, context.as_bytes())
+}
+
+fn right_from(word: &[u8], mut i: usize, context: &[u8]) -> bool {
     let at = |i: usize| word.get(i).copied().unwrap_or(b' ');
-    for &symbol in context.as_bytes() {
-        match symbol {
-            b' ' => {
-                if at(i).is_ascii_uppercase() || at(i) == b'\'' {
-                    return false;
-                }
-                i += 1;
+    let Some((&symbol, rest)) = context.split_first() else { return true };
+    match symbol {
+        b' ' => {
+            if at(i).is_ascii_uppercase() || at(i) == b'\'' {
+                return false;
             }
-            b'#' => {
-                if !is_vowel(at(i)) {
-                    return false;
-                }
-                while is_vowel(at(i)) {
-                    i += 1;
-                }
+            i += 1;
+        }
+        b'#' => {
+            if !is_vowel(at(i)) {
+                return false;
             }
-            b':' => {
-                while is_consonant(at(i)) {
-                    i += 1;
-                }
-            }
-            b'^' => {
-                if !is_consonant(at(i)) {
-                    return false;
-                }
-                i += 1;
-            }
-            b'.' => {
-                if !matches!(at(i), b'B' | b'D' | b'G' | b'J' | b'L' | b'M' | b'N' | b'R' | b'V' | b'W' | b'Z') {
-                    return false;
-                }
-                i += 1;
-            }
-            b'+' => {
-                if !matches!(at(i), b'E' | b'I' | b'Y') {
-                    return false;
-                }
-                i += 1;
-            }
-            b'%' => {
-                let rest = &word[i.min(word.len())..];
-                let suffix = ["ING", "ELY", "ER", "ES", "ED", "E"].iter().find(|s| rest.starts_with(s.as_bytes()));
-                match suffix {
-                    Some(s) => i += s.len(),
-                    None => return false,
-                }
-            }
-            b'&' => {
-                if matches!(at(i), b'S' | b'C' | b'G' | b'Z' | b'X' | b'J') {
-                    i += 1;
-                } else {
-                    return false;
-                }
-            }
-            b'@' => {
-                if matches!(at(i), b'T' | b'S' | b'R' | b'D' | b'L' | b'Z' | b'N' | b'J') {
-                    i += 1;
-                } else {
-                    return false;
-                }
-            }
-            letter => {
-                if at(i) != letter {
-                    return false;
-                }
+            while is_vowel(at(i)) {
                 i += 1;
             }
         }
+        b':' => loop {
+            if right_from(word, i, rest) {
+                return true;
+            }
+            if !is_consonant(at(i)) {
+                return false;
+            }
+            i += 1;
+        },
+        b'^' if !is_consonant(at(i)) => return false,
+        b'.' if !is_voiced(at(i)) => return false,
+        b'+' if !matches!(at(i), b'E' | b'I' | b'Y') => return false,
+        b'^' | b'.' | b'+' => i += 1,
+        b'%' => {
+            let rest = &word[i.min(word.len())..];
+            match ["ING", "ELY", "ER", "ES", "ED", "E"].iter().find(|s| rest.starts_with(s.as_bytes())) {
+                Some(s) => i += s.len(),
+                None => return false,
+            }
+        }
+        b'&' => {
+            if !matches!(at(i), b'S' | b'C' | b'G' | b'Z' | b'X' | b'J') {
+                return false;
+            }
+            i += 1;
+        }
+        b'@' => {
+            if !matches!(at(i), b'T' | b'S' | b'R' | b'D' | b'L' | b'Z' | b'N' | b'J') {
+                return false;
+            }
+            i += 1;
+        }
+        letter => {
+            if at(i) != letter {
+                return false;
+            }
+            i += 1;
+        }
     }
-    true
+    right_from(word, i, rest)
 }
 
 /// ARPAbet symbols to sounds, all unstressed for now.
@@ -294,6 +281,25 @@ const STRESS_TWO_BEFORE: [&str; 4] = ["ITY", "ICAL", "OLOGY", "OGRAPHY"];
 const STRESSED_ENDINGS: [&str; 6] = ["EE", "EER", "ESE", "ETTE", "ESQUE", "OON"];
 /// Prefixes that are rarely stressed in two-syllable words, as in "begin" and "return".
 const UNSTRESSED_PREFIXES: [&str; 12] = ["A", "BE", "DE", "RE", "PRE", "PRO", "CON", "COM", "DIS", "EX", "MIS", "UN"];
+/// Prefixes that are rarely stressed in longer words too, as in "develop", "consider", and "example".
+const UNSTRESSED_LONG_PREFIXES: [&str; 6] = ["BE", "DE", "RE", "CON", "COM", "EX"];
+
+/// Whether `word` starts with `prefix` used as a prefix: followed by one consonant and a vowel ("begin", not
+/// "better"), or for "A" also a doubled consonant or a consonant and R ("apply", "across", not "after" or "apple").
+fn has_prefix(word: &[u8], prefix: &str) -> bool {
+    if word.len() <= prefix.len() + 2 || !word.starts_with(prefix.as_bytes()) {
+        return false;
+    }
+    let rest = &word[prefix.len()..];
+    let at = |i: usize| rest.get(i).copied().unwrap_or(b' ');
+    if !prefix.ends_with(|c: char| is_vowel(c as u8)) {
+        // "CON", "DIS", "UN": the prefix already ends in a consonant.
+        return true;
+    }
+    let single = is_consonant(at(0)) && is_vowel(at(1));
+    let a_cluster = prefix == "A" && is_consonant(at(0)) && (at(1) == at(0) || at(1) == b'R') && !word.ends_with(b"LE");
+    single || a_cluster
+}
 
 /// Picks the stressed vowel: from the word's ending if it has a telling one, after a prefix in two-syllable words,
 /// or else on the first syllable.
@@ -311,12 +317,52 @@ fn stress(word: &str, sounds: &mut [(&'static str, u8)]) {
     } else if STRESS_TWO_BEFORE.iter().any(|e| word.ends_with(e)) && count >= 3 {
         let ending_vowels = if word.ends_with("ITY") || word.ends_with("ICAL") { 2 } else { 3 };
         count.saturating_sub(ending_vowels + 1)
-    } else if count == 2 && UNSTRESSED_PREFIXES.iter().any(|p| word.len() > p.len() + 2 && word.starts_with(p)) {
+    } else if count == 2 && UNSTRESSED_PREFIXES.iter().any(|p| has_prefix(word.as_bytes(), p))
+        || count >= 3 && UNSTRESSED_LONG_PREFIXES.iter().any(|p| has_prefix(word.as_bytes(), p))
+    {
         1
     } else {
         0
     };
     sounds[vowels[pick.min(count - 1)]].1 = 1;
+}
+
+/// Weakens unstressed vowels, as speech does: "system" is /ˈsɪstəm/, not /ˈsɪstɛm/. E, A, and O become /ə/ (a
+/// first E before a consonant is /ɪ/, as in "example"), and an unstressed "ar" or "or" after the first syllable is
+/// /ɚ/ ("standard", "effort"). A final /oʊ/ stays ("photo").
+fn reduce(sounds: Vec<(&'static str, u8)>) -> Vec<(&'static str, u8)> {
+    let vowels: Vec<usize> = (0..sounds.len()).filter(|&i| is_arpabet_vowel(sounds[i].0)).collect();
+    if vowels.len() < 2 {
+        return sounds;
+    }
+    let (first, last) = (vowels[0], vowels[vowels.len() - 1]);
+    let mut out = Vec::with_capacity(sounds.len());
+    let mut skip_r = false;
+    for (i, &(symbol, stress)) in sounds.iter().enumerate() {
+        if skip_r {
+            skip_r = false;
+            if symbol == "R" {
+                continue;
+            }
+        }
+        if stress != 0 || !is_arpabet_vowel(symbol) {
+            out.push((symbol, stress));
+            continue;
+        }
+        let r_after = sounds.get(i + 1).is_some_and(|s| s.0 == "R");
+        let reduced = match symbol {
+            "AA" | "AO" if r_after && i != first => {
+                skip_r = true;
+                "ER"
+            }
+            "EH" if i == first && i == 0 => "IH",
+            "EH" | "AE" | "AA" => "AH",
+            "OW" if i != last => "AH",
+            other => other,
+        };
+        out.push((reduced, 0));
+    }
+    out
 }
 
 fn is_arpabet_vowel(symbol: &str) -> bool {
@@ -358,7 +404,7 @@ pub fn pronounce(word: &str) -> Vec<Sound> {
     }
     let word = String::from_utf8_lossy(&upper).into_owned();
     stress(&word, &mut arpabet);
-    to_sounds(&arpabet)
+    to_sounds(&reduce(arpabet))
 }
 
 /// Each letter's name, for spelling words out.
@@ -399,6 +445,23 @@ mod tests {
         assert_eq!(said("thin"), "θ ɪ1 n");
         assert_eq!(said("knee"), "n i1");
         assert_eq!(said("bloop"), "b l u1 p");
+        // A ":" in a rule's context backtracks, so "#^:Y" finds the final y of "lossy".
+        assert_eq!(said("lossy"), "l ɑ1 s i0");
+        assert_eq!(said("type"), "t aɪ1 p");
+        assert_eq!(said("rasterize"), "ɹ æ1 s t ɚ0 aɪ0 z");
+    }
+
+    #[test]
+    fn unstressed_vowels_weaken() {
+        assert_eq!(said("system"), "s ɪ1 s t ə0 m");
+        assert_eq!(said("standard"), "s t æ1 n d ɚ0 d");
+    }
+
+    #[test]
+    fn prefixes_are_unstressed() {
+        assert!(said("begin").contains("ɪ1"), "{}", said("begin"));
+        assert!(said("better").starts_with("b ɛ1"), "{}", said("better"));
+        assert!(said("develop").contains("ɛ1 l"), "{}", said("develop"));
     }
 
     #[test]

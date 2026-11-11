@@ -67,13 +67,16 @@ test('asks for text when there is none', async ({ page }) => {
     await expect(status(page)).toHaveText('Type some text first, or pick an example.');
 });
 
-test('points out text that is too long to say at once', async ({ page }) => {
-    await text(page).fill('word '.repeat(1000));
-    await tts(page).getByRole('button', { name: 'Save WAV' }).click();
-    await expect(status(page)).toHaveText(/more than we can say in one go/);
-    await expect(text(page)).toHaveAttribute('aria-invalid', 'true');
-    await text(page).fill('word');
-    await expect(text(page)).not.toHaveAttribute('aria-invalid');
+test('reads long text in parts, and saves it all', async ({ page }) => {
+    // About 2,500 characters, which app-speech-player splits into several parts.
+    const sentences = Array.from({ length: 60 }, (_, i) => `This is sentence ${i + 1}.`);
+    await text(page).fill(sentences.join(' '));
+    const { sampleRate, samples } = await saveWav(page);
+    expect(samples.length / sampleRate).toBeGreaterThan(60);
+    await expect(status(page)).toHaveText(/^Saved/);
+    await expect(tts(page).locator('.reading span')).toHaveCount(60 * 4);
+    await expect(tts(page).locator('.reading span').last()).toHaveText('60');
+    await expect(ipa(page)).toHaveText(/^ˈðɪs ɪz ˈsɛntəns ˈwʌn\. .* ˈsɪksti\.$/);
 });
 
 test('speak plays and highlights each word, then stops by itself or when asked', async ({ page }) => {

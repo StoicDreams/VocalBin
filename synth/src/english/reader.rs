@@ -1,10 +1,12 @@
 //! Reads English text aloud: from words to sounds, then intonation.
 //!
 //! 1. `text` turns the text into words and pauses (numbers, abbreviations, and symbols become words).
-//! 2. Each word is said, in this order of preference: spelled out (acronyms), a weak form for a small function word
-//!    ("of" as /əv/), the pronouncing dictionary (choosing between a heteronym's pronunciations from the words
-//!    around it), a dictionary word with an ending or prefix added ("blogging" from "blog"), two dictionary words
-//!    joined ("dreamboat"), and last, the letter-to-sound rules.
+//! 2. Each word is said, in this order of preference: spelled out (acronyms, and words with no vowel letters such as
+//!    "png"), a weak form for a small function word ("of" as /əv/), a short list of words with their own
+//!    pronunciation (`PRONUNCIATIONS`, for words the dictionary lacks or has wrong), the pronouncing dictionary
+//!    (choosing between a heteronym's pronunciations from the words around it), a dictionary word with an ending or
+//!    prefix added ("blogging" from "blog"), two dictionary words joined ("dreamboat"), and last, the letter-to-sound
+//!    rules (spelled instead when a short word can't be said as written, such as "rgba").
 //! 3. Long stretches without punctuation get a short breath before a joining word such as "and".
 //! 4. `prosody` sets each vowel's pitch.
 
@@ -168,8 +170,23 @@ fn heteronym(word: &str, before2: Option<&str>, before: Option<&str>, after: Opt
             let near_before = ["very", "so", "too", "a", "is", "are", "was", "were", "be", "been", "get", "got", "come", "came", "stay", "stayed", "quite", "really", "how", "that", "getting", "up"];
             if is_in(&near_after, after) || is_in(&near_before, before) { Pick::Ends("s") } else { Pick::Ends("z") }
         }
-        "use" | "excuse" | "abuse" | "refuse" if word != "refuse" || noun_context => {
+        "use" | "excuse" | "abuse" => {
             if noun_context || is_in(&["no", "much", "good", "out", "fair", "its"], before) { Pick::Ends("s") } else { Pick::Ends("z") }
+        }
+        "bass" => {
+            // The fish only with fishing words around it. Otherwise the music: "the bass", "bass player".
+            let music_after = ["player", "players", "guitar", "guitars", "guitarist", "line", "lines", "drum", "drums", "clef", "note", "notes", "boost", "section", "voice", "singer", "amp", "solo", "part"];
+            let fish = is_in(&["fishing", "fish", "boat", "boats", "lake", "pond", "fillet", "fillets"], after)
+                || is_in(&["sea", "striped", "largemouth", "smallmouth", "caught", "catch", "catching", "for"], before) && !is_in(&music_after, after);
+            if fish { Pick::Vowel("æ") } else { Pick::Vowel("eɪ") }
+        }
+        "dove" => {
+            let motion_after = ["into", "in", "off", "under", "for", "down", "from", "onto", "through", "to", "headfirst", "deep", "back", "right", "straight", "toward", "towards", "after", "over", "out", "beneath", "behind", "between"];
+            if is_in(&motion_after, after) && !is_in(&DETERMINERS, before) { Pick::Vowel("oʊ") } else { Pick::Vowel("ʌ") }
+        }
+        "minute" => {
+            let tiny_after = ["detail", "details", "amount", "amounts", "quantity", "quantities", "particle", "particles", "difference", "differences", "change", "changes", "trace", "traces", "fraction", "variation", "variations", "adjustment", "adjustments", "fragment", "fragments", "organism", "organisms", "creature", "creatures", "piece", "pieces"];
+            if is_in(&tiny_after, after) { Pick::Vowel("u") } else { Pick::Vowel("ɪ") }
         }
         w if STRESS_SHIFTS.contains(&w) => {
             if verb_context { Pick::LateStress } else if noun_context { Pick::EarlyStress } else { return None }
@@ -223,24 +240,46 @@ fn add_ed(mut sounds: Vec<Sound>) -> Vec<Sound> {
 }
 
 /// The stem a word with this ending may have come from: as is, with a silent e put back, with a doubled consonant
-/// undone, or with y put back for i.
+/// undone, or with y put back for i. The likeliest comes first: y for a final i ("minified"), and the silent e
+/// after one vowel and one consonant ("acing" is "ace", not "AC"), since a short vowel would have doubled the
+/// consonant ("hopping").
 fn stems(stem: &str) -> Vec<String> {
-    let mut stems = vec![stem.to_string(), format!("{stem}e")];
     let bytes = stem.as_bytes();
-    if bytes.len() >= 3 && bytes[bytes.len() - 1] == bytes[bytes.len() - 2] {
-        stems.push(stem[..stem.len() - 1].to_string());
+    let vowel = |b: u8| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u');
+    let n = bytes.len();
+    let one_vowel = bytes.iter().enumerate().filter(|&(i, &b)| vowel(b) && (i == 0 || !vowel(bytes[i - 1]))).count() == 1;
+    let silent_e = n >= 2 && one_vowel && vowel(bytes[n - 2]) && !vowel(bytes[n - 1]) && !matches!(bytes[n - 1], b'w' | b'x' | b'y')
+        && (n < 3 || !vowel(bytes[n - 3]));
+    let mut stems = if silent_e { vec![format!("{stem}e"), stem.to_string()] } else { vec![stem.to_string(), format!("{stem}e")] };
+    if n >= 3 && bytes[n - 1] == bytes[n - 2] {
+        stems.push(stem[..n - 1].to_string());
     }
     if let Some(s) = stem.strip_suffix('i') {
-        stems.push(format!("{s}y"));
+        stems.insert(0, format!("{s}y"));
     }
     stems
 }
 
-/// Endings added to a dictionary word, with their sounds. `-s` and `-ed` change with the word's last sound.
-const SUFFIXES: [(&str, &str); 16] = [
-    ("'s", "S"), ("s'", "S"), ("es", "S"), ("s", "S"), ("ed", "ED"), ("ing", "IH0 NG"), ("ers", "ER0 Z"), ("er", "ER0"),
-    ("est", "AH0 S T"), ("ly", "L IY0"), ("ness", "N AH0 S"), ("less", "L AH0 S"), ("ful", "F AH0 L"), ("ments", "M AH0 N T S"),
-    ("ment", "M AH0 N T"), ("able", "AH0 B AH0 L"),
+/// The stems to try for an ending. A plural "-s" never comes off "-ss" ("metalness"), and "-es" only follows a hiss
+/// or an o ("boxes", "heroes"); otherwise the word is a stem ending in e plus "-s" ("spaces").
+fn stems_for(suffix: &str, stem: &str) -> Vec<String> {
+    match suffix {
+        "s" if stem.ends_with('s') => Vec::new(),
+        "'s" | "s'" | "s" | "'ve" | "'ll" | "'d" => vec![stem.to_string()],
+        "es" if ["s", "x", "z", "ch", "sh", "o"].iter().any(|e| stem.ends_with(e)) => vec![stem.to_string()],
+        "es" => stem.strip_suffix('i').map(|s| vec![format!("{s}y")]).unwrap_or_default(),
+        _ => stems(stem),
+    }
+}
+
+/// Endings added to a dictionary word, with their sounds. `-s` and `-ed` change with the word's last sound. An ending
+/// with a primary stress takes it from the stem ("readability").
+const SUFFIXES: [(&str, &str); 26] = [
+    ("'s", "S"), ("s'", "S"), ("'ve", "AH0 V"), ("'ll", "AH0 L"), ("'d", "D"), ("es", "S"), ("s", "S"), ("ed", "ED"),
+    ("ing", "IH0 NG"), ("ers", "ER0 Z"), ("er", "ER0"), ("est", "AH0 S T"), ("ly", "L IY0"), ("ness", "N AH0 S"),
+    ("less", "L AH0 S"), ("ful", "F AH0 L"), ("ments", "M AH0 N T S"), ("ment", "M AH0 N T"), ("ability", "AH0 B IH1 L AH0 T IY0"),
+    ("able", "AH0 B AH0 L"), ("al", "AH0 L"), ("ize", "AY2 Z"), ("ify", "AH0 F AY2"), ("ism", "IH2 Z AH0 M"), ("ists", "IH0 S T S"),
+    ("ist", "IH0 S T"),
 ];
 
 /// Prefixes added to a dictionary word, which keeps its own stress.
@@ -255,38 +294,55 @@ fn demote(sounds: Vec<Sound>) -> Vec<Sound> {
     sounds.into_iter().map(|(p, s)| (p, if s == 1 { 2 } else { s })).collect()
 }
 
-/// Says a word the dictionary doesn't have from parts it does: an ending, a prefix, or two words joined.
+/// Adds an ending's sounds to a stem's.
+fn add_ending(sounds: Vec<Sound>, ending: &str) -> Vec<Sound> {
+    match ending {
+        "S" => add_s(sounds),
+        "ED" => add_ed(sounds),
+        // "optional" + "ly" has one l.
+        "L IY0" if ends_with(&sounds, &["l"]) => {
+            let mut sounds = sounds;
+            sounds.extend(arpabet("IY0"));
+            sounds
+        }
+        _ => {
+            let mut sounds = if ending.contains('1') { demote(sounds) } else { sounds };
+            sounds.extend(arpabet(ending));
+            sounds
+        }
+    }
+}
+
+/// Says a word the dictionary doesn't have from parts it does: an ending, a prefix, or two words joined. Parts
+/// straight from the dictionary are tried before parts that are themselves built, so "workspaces" is "workspace"
+/// plus "-s", not "works" plus "PAC" plus "-s".
 fn derive(word: &str, dictionary: &Dictionary, depth: u8) -> Option<Vec<Sound>> {
     if depth == 0 || word.len() < 4 {
         return None;
     }
-    let known = |w: &str| -> Option<Vec<Sound>> {
-        dictionary.lookup(w).into_iter().next().or_else(|| derive(w, dictionary, depth - 1))
-    };
-    for (suffix, ending) in SUFFIXES {
-        let Some(stem) = word.strip_suffix(suffix).filter(|s| s.len() >= 2) else { continue };
-        let candidates = if matches!(suffix, "'s" | "s'" | "s") { vec![stem.to_string()] } else { stems(stem) };
-        for candidate in candidates {
-            if let Some(sounds) = known(&candidate) {
-                return Some(match ending {
-                    "S" => add_s(sounds),
-                    "ED" => add_ed(sounds),
-                    _ => {
-                        let mut sounds = sounds;
-                        sounds.extend(arpabet(ending));
-                        sounds
-                    }
-                });
+    for deep in [false, true] {
+        if deep && depth == 1 {
+            break;
+        }
+        let known = |w: &str| -> Option<Vec<Sound>> {
+            dictionary.lookup(w).into_iter().next().or_else(|| if deep { derive(w, dictionary, depth - 1) } else { None })
+        };
+        for (suffix, ending) in SUFFIXES {
+            let Some(stem) = word.strip_suffix(suffix).filter(|s| s.len() >= 2) else { continue };
+            for candidate in stems_for(suffix, stem) {
+                if let Some(sounds) = known(&candidate) {
+                    return Some(add_ending(sounds, ending));
+                }
             }
         }
-    }
-    for (prefix, start) in PREFIXES {
-        if let Some(rest) = word.strip_prefix(prefix).filter(|r| r.len() >= 3)
-            && let Some(sounds) = known(rest)
-        {
-            let mut all = arpabet(start);
-            all.extend(sounds);
-            return Some(all);
+        for (prefix, start) in PREFIXES {
+            if let Some(rest) = word.strip_prefix(prefix).filter(|r| r.len() >= 3)
+                && let Some(sounds) = known(rest)
+            {
+                let mut all = arpabet(start);
+                all.extend(sounds);
+                return Some(all);
+            }
         }
     }
     // Two words joined, the longest first part first: "dreamboat". An s between them goes with the second word, as
@@ -300,7 +356,11 @@ fn derive(word: &str, dictionary: &Dictionary, depth: u8) -> Option<Vec<Sound>> 
             continue;
         }
         let (first, second) = word.split_at(split);
-        if let (Some(a), Some(b)) = (dictionary.lookup(first).into_iter().next(), dictionary.lookup(second).into_iter().next()) {
+        // The second word may be plural: "walkthroughs".
+        let second_sounds = dictionary.lookup(second).into_iter().next().or_else(|| {
+            second.strip_suffix('s').filter(|s| s.len() >= 3 && !s.ends_with('s')).and_then(|s| dictionary.lookup(s).into_iter().next()).map(add_s)
+        });
+        if let (Some(a), Some(b)) = (dictionary.lookup(first).into_iter().next(), second_sounds) {
             let mut all = a;
             all.extend(demote(b));
             return Some(all);
@@ -311,6 +371,19 @@ fn derive(word: &str, dictionary: &Dictionary, depth: u8) -> Option<Vec<Sound>> 
 
 /// Short words in capitals that are spelled, though the dictionary has them as words: "US", "IT".
 const SPELLED_CAPS: [&str; 8] = ["us", "uk", "eu", "ai", "tv", "pc", "id", "it"];
+/// Words spelled however they are written: "url", "uuid".
+const SPELLED_WORDS: [&str; 7] = ["url", "urls", "uuid", "api", "apis", "ui", "ux"];
+
+/// Words said in a way neither the dictionary nor the rules would find, in ARPAbet. Checked before spelling, so
+/// "JSON" is a word and not four letters.
+#[rustfmt::skip]
+const PRONUNCIATIONS: [(&str, &str); 12] = [
+    ("json", "JH EY1 S AH0 N"), ("readme", "R IY1 D M IY2"), ("emoji", "IH0 M OW1 JH IY0"), ("emojis", "IH0 M OW1 JH IY0 Z"),
+    ("github", "G IH1 T HH AH2 B"), ("gif", "G IH1 F"), ("gifs", "G IH1 F S"), ("wasm", "W AA1 Z AH0 M"),
+    ("ascii", "AE1 S K IY0"), ("sudo", "S UW1 D UW0"),
+    // The dictionary has /aʊ/ here.
+    ("walkthrough", "W AO1 K TH R UW2"), ("walkthroughs", "W AO1 K TH R UW2 Z"),
+];
 
 /// Keeps only the last primary stress, lowering the others to secondary. The dictionary gives some acronyms a primary
 /// stress on every letter.
@@ -329,11 +402,24 @@ fn has_vowel_letter(word: &str) -> bool {
     word.contains(['a', 'e', 'i', 'o', 'u', 'y'])
 }
 
-/// Whether a word in capitals is an acronym to spell: a short one with no vowels or on the list, or one the
-/// dictionary doesn't have.
+/// Whether a word is spelled out: one in capitals that is short with no vowels or on the list, or that the
+/// dictionary doesn't have, and a word in any case with no vowel letters ("www", "png") that the dictionary lacks.
 fn spell_caps(word: &str, caps: bool, dictionary: Option<&Dictionary>) -> bool {
-    caps && ((word.len() <= 5 && (SPELLED_CAPS.contains(&word) || !has_vowel_letter(word)))
-        || (word.len() <= 4 && dictionary.is_some_and(|d| !d.contains(word))))
+    if PRONUNCIATIONS.iter().any(|p| p.0 == word) {
+        return false;
+    }
+    let missing = dictionary.is_none_or(|d| !d.contains(word));
+    SPELLED_WORDS.contains(&word)
+        || caps && ((word.len() <= 5 && (SPELLED_CAPS.contains(&word) || !has_vowel_letter(word))) || (word.len() <= 4 && missing))
+        || (word.len() <= 6 && !has_vowel_letter(word) && missing && word.bytes().all(|b| b.is_ascii_lowercase()))
+}
+
+/// Whether a short word from the letter rules can't be said as written, because it starts with consonants no English
+/// syllable starts with ("rgba", "hsla") or has no vowel. Such words are spelled instead.
+fn unsayable(sounds: &[Sound]) -> bool {
+    let Some(first) = sounds.iter().position(|(p, _)| p.is_vowel()) else { return true };
+    let onset: Vec<&str> = sounds[..first].iter().map(|(p, _)| p.ipa).collect();
+    !is_onset(&onset)
 }
 
 /// The sounds for one word, and whether it is a function word.
@@ -359,6 +445,9 @@ fn pronounce(words: &[(String, bool, bool)], i: usize, dictionary: Option<&Dicti
             return (arpabet(weak), true);
         }
     }
+    if let Some(&(_, sounds)) = PRONUNCIATIONS.iter().find(|p| p.0 == word) {
+        return (arpabet(sounds), false);
+    }
     if let Some(dictionary) = dictionary {
         let pronunciations = dictionary.lookup(word);
         if let Some(first) = pronunciations.first() {
@@ -369,7 +458,11 @@ fn pronounce(words: &[(String, bool, bool)], i: usize, dictionary: Option<&Dicti
             return (sounds, false);
         }
     }
-    (letters::pronounce(word), false)
+    let sounds = letters::pronounce(word);
+    if word.len() <= 5 && unsayable(&sounds) && word.bytes().all(|b| b.is_ascii_lowercase()) {
+        return (one_primary(word.chars().flat_map(letters::letter_name).collect()), false);
+    }
+    (sounds, false)
 }
 
 /// Joining words before which a long phrase can take a breath.
@@ -624,6 +717,12 @@ pub mod tests {
         assert_eq!(ipa("very close"), "ˈvɛɹi ˈkloʊs");
         assert_eq!(ipa("a tear fell"), "ə ˈtɪɹ ˈfɛl");
         assert_eq!(ipa("don't tear it"), "ˈdoʊnt ˈtɛɹ ɪt");
+        assert_eq!(ipa("collect the refuse"), "kəˈlɛkt ðə ˈɹɛˌfjuz");
+        assert_eq!(ipa("the bass player"), "ðə ˈbeɪs ˈpleɪɚ");
+        assert_eq!(ipa("fish for bass"), "ˈfɪʃ fɚ ˈbæs");
+        assert_eq!(ipa("the dove dove into"), "ðə ˈdʌv ˈdoʊv ˈɪntu");
+        assert_eq!(ipa("minute details"), "maɪˈnut dɪˈteɪlz");
+        assert_eq!(ipa("a minute"), "ə ˈmɪnət");
     }
 
     #[test]
@@ -635,6 +734,24 @@ pub mod tests {
         assert_eq!(ipa("rewatchable"), "ˌɹiˈwɑtʃəbəl");
         assert_eq!(ipa("doomscrolling"), "ˈdumˌskɹoʊlɪŋ");
         assert_eq!(ipa("zorbled").chars().filter(|&c| c == 'ˈ').count(), 1);
+        // A dictionary word before a built one: "workspace" + "-s", not "works" + "PAC" + "-s".
+        assert_eq!(ipa("workspaces"), "ˈwɝkˌspeɪsɪz");
+        // "-ness" is not a plural.
+        assert_eq!(ipa("metalness"), "ˈmɛtəlnəs");
+        // One l in "-ally", and "-al", "-ize", "-ify" endings.
+        assert_eq!(ipa("optionally"), "ˈɑpʃənəli");
+        assert_eq!(ipa("statically"), "ˈstætɪkəli");
+        assert_eq!(ipa("parameterized"), "pɚˈæmətɚˌaɪzd");
+        // y for i, and a silent e after one vowel and one consonant.
+        assert_eq!(ipa("acing"), "ˈeɪsɪŋ");
+        assert!(ipa("minified").ends_with("ˌfaɪd"), "{}", ipa("minified"));
+        assert_eq!(ipa("she'd've"), "ˈʃidəv");
+    }
+
+    #[test]
+    fn some_words_have_their_own_pronunciation() {
+        assert_eq!(ipa("JSON"), "ˈdʒeɪsən");
+        assert_eq!(ipa("walkthroughs"), "ˈwɔkˌθɹuz");
     }
 
     #[test]
@@ -644,6 +761,11 @@ pub mod tests {
         assert_eq!(ipa("NASA"), "ˈnæsə");
         assert_eq!(ipa("XKCD"), "ˌɛks ˌkeɪ ˌsi ˈdi");
         assert_eq!(ipa("the F.B.I."), "ði ˌɛf ˌbi ˈaɪ.");
+        // Words with no vowel letters are spelled in any case, unless the dictionary has them.
+        assert_eq!(ipa("png"), "ˌpi ˌɛn ˈdʒi");
+        assert_eq!(ipa("hmm"), ipa("Hmm"));
+        // A short word that starts with sounds no English word starts with is spelled too.
+        assert_eq!(ipa("rgba").matches(['ˈ', 'ˌ']).count(), 4, "{}", ipa("rgba"));
     }
 
     #[test]

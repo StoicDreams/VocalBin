@@ -4,8 +4,9 @@
 //! - **Accents:** the stressed syllable of each content word is raised, a little less each time (downstep). Function
 //!   words such as "the" and "of" are not accented.
 //! - **Nucleus:** the last accent of a phrase carries its tune. A statement, a question starting with a question word
-//!   ("where", "how"), and an exclamation fall from it. A yes-no question falls low on it and rises to the end. A
-//!   phrase that continues after a comma rises a little at its end, so the listener hears there is more.
+//!   ("where", "how", also after a lead-in such as "So,"), a choice question ending "or juice?", and an exclamation
+//!   fall from it. A yes-no question falls low on it and rises to the end. A phrase that continues after a comma
+//!   rises a little at its end, so the listener hears there is more.
 //!
 //! Each vowel gets a start and end pitch, so the nucleus can rise and fall within one syllable. The numbers are
 //! fractions of the voice's pitch, before the intonation setting scales them, and are starting points to tune by ear.
@@ -25,6 +26,8 @@ const CONTINUATION_RISE: f32 = 0.10;
 const EXCLAMATION: f32 = 1.4;
 
 const QUESTION_WORDS: [&str; 9] = ["who", "what", "when", "where", "why", "which", "whose", "whom", "how"];
+/// Words that can come before a question's first real word: "And where is it?", "So, what now?"
+const LEAD_INS: [&str; 9] = ["and", "but", "so", "then", "well", "okay", "ok", "oh", "now"];
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tune {
@@ -60,13 +63,20 @@ pub fn apply(spoken: &mut [Spoken]) {
 }
 
 fn sentence(spoken: &mut [Spoken], mark: char) {
-    let first_word = spoken.iter().find_map(|s| match s {
-        Spoken::Word(w) => Some(w.text.clone()),
-        _ => None,
-    });
+    let words: Vec<&str> = spoken
+        .iter()
+        .filter_map(|s| match s {
+            Spoken::Word(w) => Some(w.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let first_word = words.iter().find(|w| !LEAD_INS.contains(w));
+    // The last phrase of "tea, coffee, or juice?" starts with "or".
+    let last_phrase_start = spoken.iter().rposition(|s| matches!(s, Spoken::Break { .. })).map_or(0, |i| i + 1);
+    let choice = matches!(spoken.get(last_phrase_start), Some(Spoken::Word(w)) if w.text == "or") && last_phrase_start > 0;
     let range = if mark == '!' { EXCLAMATION } else { 1.0 };
     let final_tune = match mark {
-        '?' if !first_word.as_deref().is_some_and(|w| QUESTION_WORDS.contains(&w)) => Tune::Rise,
+        '?' if !first_word.is_some_and(|w| QUESTION_WORDS.contains(w)) && !choice => Tune::Rise,
         _ => Tune::Fall,
     };
 
@@ -207,6 +217,10 @@ mod tests {
         let wh = tones("Where is it raining?");
         assert!(yes_no.last().unwrap().1 > 0.2, "{yes_no:?}");
         assert!(wh.last().unwrap().1 < -0.1, "{wh:?}");
+        let lead_in = tones("So, where is it?");
+        assert!(lead_in.last().unwrap().1 < -0.1, "{lead_in:?}");
+        let choice = tones("Do you want tea, coffee, or juice?");
+        assert!(choice.last().unwrap().1 < -0.1, "{choice:?}");
     }
 
     #[test]

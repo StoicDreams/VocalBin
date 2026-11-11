@@ -18,5 +18,16 @@
         "name": "Phoneme Lab",
         "icon": "music",
         "url": "/phoneme-lab"
+    },
+    {
+        "name": "Guides",
+        "icon": "book",
+        "children": [
+            {
+                "name": "How Speech Is Made",
+                "icon": "comment",
+                "url": "/guides/how-speech-is-made"
+            }
+        ]
     }
 ]

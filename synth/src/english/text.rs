@@ -78,7 +78,7 @@ const ABBREVIATIONS: [(&str, &str, bool); 47] = [
 ];
 
 /// Units read after a number, as singular and plural.
-const UNITS: [(&str, &str, &str); 24] = [
+const UNITS: [(&str, &str, &str); 30] = [
     ("km", "kilometer", "kilometers"),
     ("cm", "centimeter", "centimeters"),
     ("mm", "millimeter", "millimeters"),
@@ -103,6 +103,12 @@ const UNITS: [(&str, &str, &str); 24] = [
     ("gb", "gigabyte", "gigabytes"),
     ("tb", "terabyte", "terabytes"),
     ("x", "times", "times"),
+    ("hr", "hour", "hours"),
+    ("hrs", "hour", "hours"),
+    ("min", "minute", "minutes"),
+    ("mins", "minute", "minutes"),
+    ("sec", "second", "seconds"),
+    ("secs", "second", "seconds"),
 ];
 
 /// Units that may also follow a number as their own word, as in "5 km". The others, such as "g" and "x", are only
@@ -114,6 +120,44 @@ fn is_separate_unit(unit: &str) -> bool {
 const CURRENCIES: [(char, &str, &str); 4] = [('$', "dollar", "dollars"), ('€', "euro", "euros"), ('£', "pound", "pounds"), ('¥', "yen", "yen")];
 
 const SCALE_WORDS: [&str; 4] = ["thousand", "million", "billion", "trillion"];
+
+/// Words that often start a sentence. After "U.S." or other initials, a capital starting one of these is taken as a
+/// new sentence. Any other capital is a name: "the U.S. Army".
+const SENTENCE_STARTS: [&str; 44] = [
+    "the", "a", "an", "i", "we", "he", "she", "it", "they", "you", "this", "that", "these", "those", "there", "in", "on",
+    "at", "but", "and", "so", "if", "when", "what", "why", "how", "our", "my", "his", "her", "their", "its", "as", "for",
+    "after", "before", "then", "some", "many", "most", "all", "no", "yes", "today",
+];
+
+/// Words before a Roman numeral that is read as a plain number: "Chapter IV", "World War II".
+const NUMBERED: [&str; 18] = [
+    "chapter", "part", "volume", "book", "act", "scene", "section", "phase", "stage", "level", "war", "type", "class",
+    "article", "appendix", "episode", "season", "bowl",
+];
+
+/// A Roman numeral of I, V, and X letters, up to 39, such as "IV" and "XIII". `None` for anything else.
+fn roman(letters: &str) -> Option<u64> {
+    let value = |c| match c {
+        'I' => Some(1),
+        'V' => Some(5),
+        'X' => Some(10),
+        _ => None,
+    };
+    let digits: Vec<u64> = letters.chars().map(value).collect::<Option<_>>()?;
+    let mut total = 0;
+    for (i, &d) in digits.iter().enumerate() {
+        if digits.get(i + 1).is_some_and(|&next| next > d) {
+            total -= d as i64;
+        } else {
+            total += d as i64;
+        }
+    }
+    // Only the standard way of writing it: "IIII" and "VX" are not numerals.
+    let total = u64::try_from(total).ok().filter(|&t| (1..40).contains(&t))?;
+    let tens = "X".repeat((total / 10) as usize);
+    let ones = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"][(total % 10) as usize];
+    (format!("{tens}{ones}") == letters).then_some(total)
+}
 
 /// Symbols said as words.
 fn symbol_word(c: char) -> Option<&'static str> {
@@ -348,8 +392,11 @@ impl<'a> Reader<'a> {
                     // "No." is only "number" before a number.
                     let before_number = self.chunks.get(index + 1).is_some_and(|c| c.text.starts_with(|c: char| c.is_ascii_digit()));
                     if key != "no" || before_number {
-                        // "St." before a name is "Saint", unless it follows one: "Main St.".
+                        // "St." before a name is "Saint", unless it follows one: "Main St.". "Dr." after a name is "Drive",
+                        // unless a name follows it: "Oak Dr.", "Dr. Smith".
                         let words = if key == "st" && next_capital && !last && !previous_capital { "saint" } else { words };
+                        let drive = key == "dr" && previous_capital && (last || !next_capital);
+                        let (words, can_end) = if drive { ("drive", true) } else { (words, can_end) };
                         self.say(&[words], (offset, core.len()));
                         if trailing == "." && !(can_end && (last || next_capital)) || key == "st" && words == "saint" {
                             mark = None;
@@ -364,7 +411,9 @@ impl<'a> Reader<'a> {
                 let initials = core.split('.').all(|p| p.chars().count() == 1 && p.chars().all(char::is_alphabetic));
                 if initials {
                     self.spell(core, (offset, core.len()));
-                    if trailing == "." && !(last || next_capital && core.contains('.')) {
+                    // "in the U.S. Army" goes on; "in the U.S. The next day" is a new sentence.
+                    let starts_sentence = self.peek(index).is_some_and(|w| SENTENCE_STARTS.contains(&w.as_str()));
+                    if trailing == "." && !(last || next_capital && core.contains('.') && starts_sentence) {
                         mark = None;
                     }
                     if core.chars().count() == 1 && !last {
@@ -493,6 +542,11 @@ impl<'a> Reader<'a> {
                 1
             }
             Part::Symbol('#', _) if !matches!(next, Some(Part::Number(..))) => 1,
+            Part::Symbol('°', _) if matches!(next, Some(&Part::Letters(l, _)) if matches!(l, "F" | "C")) => {
+                let scale = if matches!(next, Some(Part::Letters("F", _))) { "fahrenheit" } else { "celsius" };
+                self.say(&["degrees", scale], span_to(i + 1));
+                2
+            }
             Part::Symbol('%', _) if i > 0 && matches!(parts[i - 1], Part::Number(..)) => {
                 self.say(&["percent"], parts[i].span());
                 1
@@ -545,6 +599,25 @@ impl<'a> Reader<'a> {
                     }
                     return 1;
                 }
+                // A Roman numeral after a name is an ordinal, "Charles III" "Charles the third", and after a word
+                // such as "Chapter" a number, "Chapter IV" "chapter four".
+                if i == 0
+                    && index > 0
+                    && let Some(n) = roman(letters).filter(|_| letters.len() >= 2 || letters == "V")
+                {
+                    let previous = &self.chunks[index - 1].text;
+                    let previous_word = plain(previous.trim_end_matches(is_trailing));
+                    if previous.ends_with(char::is_alphabetic) && NUMBERED.contains(&previous_word.as_str()) {
+                        self.say_all(numbers::cardinal(n), span);
+                        return 1;
+                    }
+                    if previous.ends_with(char::is_alphabetic) && previous.starts_with(char::is_uppercase) && previous_word.len() > 1 {
+                        let mut words = vec!["the".to_string()];
+                        words.extend(numbers::ordinal(n));
+                        self.say_all(words, span);
+                        return 1;
+                    }
+                }
                 let caps = letters.chars().count() > 1 && letters.chars().all(|c| !c.is_lowercase());
                 self.word(&key, span, caps);
                 // Letters straight before a number, as in "MP3", are spelled when short and in capitals.
@@ -570,19 +643,24 @@ impl<'a> Reader<'a> {
         };
         let value = number.replace(',', "").parse::<f64>().ok();
 
-        // A time, "3:30", "10:05 pm".
-        if let Some((h, m)) = number.split_once(':')
-            && let (Ok(h), Ok(m)) = (h.parse::<u64>(), m.parse::<u64>())
-            && h < 24
-            && m < 60
-            && m.to_string().len() <= 2
-            && !m.to_string().is_empty()
+        // A time, "3:30", "10:05 pm". Minutes always have two digits, so "3:1" is a ratio, "three to one".
+        if let Some((h_text, m_text)) = number.split_once(':')
+            && let (Ok(h), Ok(m)) = (h_text.parse::<u64>(), m_text.parse::<u64>())
             && number.split(':').count() == 2
         {
-            let am_pm = matches!(next, Some(Part::Letters(l, _)) if matches!(plain(l).as_str(), "am" | "pm" | "a.m" | "p.m"))
-                || self.peek(index).is_some_and(|w| matches!(w.as_str(), "am" | "pm" | "a.m" | "p.m"));
-            self.say_all(numbers::time(h, m, am_pm), span);
-            return 1;
+            if m_text.len() == 2 && h < 24 && m < 60 {
+                let am_pm = matches!(next, Some(Part::Letters(l, _)) if matches!(plain(l).as_str(), "am" | "pm" | "a.m" | "p.m"))
+                    || self.peek(index).is_some_and(|w| matches!(w.as_str(), "am" | "pm" | "a.m" | "p.m"));
+                self.say_all(numbers::time(h, m, am_pm), span);
+                return 1;
+            }
+            if h_text.len() <= 2 && m_text.len() <= 2 {
+                let mut words = numbers::cardinal(h);
+                words.push("to".into());
+                words.extend(numbers::cardinal(m));
+                self.say_all(words, span);
+                return 1;
+            }
         }
         if number.contains(':') {
             for (n, piece) in number.split(':').enumerate() {
@@ -623,7 +701,15 @@ impl<'a> Reader<'a> {
             if let (Some(a), Some(b)) = (a, b) {
                 let span = span_to(i + 2);
                 if *join == '/' && third.is_none() && b > 1 && b <= 10 && a < 100 {
-                    self.say_all(numbers::fraction(a, b), span);
+                    // After a whole number, "2 1/2" is "two and a half".
+                    let mut words = numbers::fraction(a, b);
+                    if self.last_number.is_some_and(|n| n.fract() == 0.0) && a < b {
+                        if a == 1 {
+                            words[0] = "a".into();
+                        }
+                        words.insert(0, "and".into());
+                    }
+                    self.say_all(words, span);
                     return 3;
                 }
                 if *join != '/' && third.is_none() {
@@ -793,11 +879,41 @@ mod tests {
     }
 
     #[test]
+    fn roman_numerals() {
+        assert_eq!(said("World War II ended."), "world war two ended .");
+        assert_eq!(said("Chapter IV"), "chapter four");
+        assert_eq!(said("King Charles III spoke."), "king charles the third spoke .");
+        assert_eq!(said("Henry V"), "henry the fifth");
+        // Not after a name or a numbering word, and not other capitals.
+        assert_eq!(said("I said XIV"), "i said xiv");
+        assert_eq!(said("Charles MIX"), "charles mix");
+    }
+
+    #[test]
+    fn ratios_fractions_and_temperatures() {
+        assert_eq!(said("3:1"), "three to one");
+        assert_eq!(said("2 1/2 cups"), "two and a half cups");
+        assert_eq!(said("1 3/4"), "one and three quarters");
+        assert_eq!(said("-5°F"), "minus five degrees fahrenheit");
+        assert_eq!(said("20°C"), "twenty degrees celsius");
+        assert_eq!(said("3 hrs 15 min"), "three hours fifteen minutes");
+    }
+
+    #[test]
     fn units() {
         assert_eq!(said("5km and 1 kg"), "five kilometers and one kilogram");
         assert_eq!(said("60 mph"), "sixty miles per hour");
         assert_eq!(said("2x faster"), "two times faster");
         assert_eq!(said("a 4K screen"), "a four K screen");
+    }
+
+    #[test]
+    fn initials_and_drive() {
+        assert_eq!(said("the U.S. Army"), "the U S army");
+        assert_eq!(said("in the U.S. The next day"), "in the U S . the next day");
+        assert_eq!(said("Oak Dr. near here"), "oak drive near here");
+        assert_eq!(said("Dr. Smith"), "doctor smith");
+        assert_eq!(said("on Oak Dr."), "on oak drive .");
     }
 
     #[test]

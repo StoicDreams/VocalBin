@@ -1,15 +1,13 @@
 /*!
  * Vocal Bin Phoneme Lab
  * Stage 2 of the Vocal Bin speech synthesizer: type phonemes in ARPAbet or IPA, hear them spoken, and save a WAV file.
- * The sound comes from synth/ (Rust, compiled to vocal-synth.wasm), rendered in a Web Worker.
+ * The sound comes from synth/ (Rust, compiled to vocal-synth.wasm), through app-speech-player.
  * Authored by Erik Gassler - Stoic Dreams
  * Copyright © 2026 Stoic Dreams - https://www.stoicdreams.com
  * Licensed under the MIT license - https://github.com/StoicDreams/MyFiCDN/blob/main/LICENSE
  */
 "use strict"
 {
-    // Parameter numbers, the same as vocal_synth::param in synth/src/voice.rs.
-    const PARAM = { pitch: 0, tract: 1, rd: 2, breath: 3, roughness: 4, volume: 7, rate: 10, intonation: 11 };
     // The same phonemes as ARPABET in synth/src/english.rs: symbol, IPA, example word.
     const VOWELS = [
         ['AA', 'ɑ', 'odd'], ['AE', 'æ', 'at'], ['AH', 'ʌ', 'hut'], ['AO', 'ɔ', 'ought'], ['AW', 'aʊ', 'cow'],
@@ -49,101 +47,6 @@
             error: bad => `“${bad}” isn't a sound this English voice knows. The chart shows the IPA it reads.`,
         },
     };
-    const percent = v => `${Math.round(v * 100)}%`;
-    const quality = v => `${v < 0.8 ? 'pressed' : v > 1.6 ? 'lax' : 'modal'} (${v.toFixed(2)})`;
-    const SLIDERS = [
-        { key: 'pitch', label: 'Pitch', min: 50, max: 400, step: 1, value: 110, show: v => `${v} Hz` },
-        { key: 'rate', label: 'Speed', min: 0.5, max: 2, step: 0.05, value: 1, show: v => `${v.toFixed(2)}×` },
-        { key: 'intonation', label: 'Intonation', min: 0, max: 2, step: 0.05, value: 1, show: percent },
-        { key: 'tract', label: 'Vocal tract length', min: 10, max: 22, step: 0.1, value: 17.5, show: v => `${v.toFixed(1)} cm` },
-        { key: 'rd', label: 'Voice quality', min: 0.3, max: 2.7, step: 0.05, value: 1, show: quality },
-        { key: 'breath', label: 'Breathiness', min: 0, max: 1, step: 0.01, value: 0.1, show: percent },
-        { key: 'roughness', label: 'Roughness', min: 0, max: 1, step: 0.01, value: 0.15, show: percent },
-        { key: 'volume', label: 'Volume', min: 0, max: 1, step: 0.01, value: 0.8, show: percent },
-    ];
-    const PRESETS = {
-        Man: { pitch: 110, tract: 17.5, rd: 1, breath: 0.1 },
-        Woman: { pitch: 210, tract: 14.8, rd: 1.4, breath: 0.2 },
-        Child: { pitch: 290, tract: 12.5, rd: 1.3, breath: 0.15 },
-    };
-    const DEFAULT_SAMPLE_RATE = 44100;
-
-    /** Fetches a site file once per visit. */
-    function once(url, read) {
-        let promise = null;
-        return () => {
-            if (!promise) {
-                promise = fetch(url).then(response => {
-                    if (!response.ok) throw new Error(`${url}: ${response.status}`);
-                    return read(response);
-                });
-                promise.catch(() => { promise = null; });
-            }
-            return promise;
-        };
-    }
-    const loadWasm = once('/vocal-synth.wasm', response => response.arrayBuffer());
-    // The worker script loads from a Blob URL, so its request takes the same path as other site files.
-    const loadWorkerUrl = once('/vocal-synth-speaker-worker.min.js', response => response.text()
-        .then(code => URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))));
-
-    // One worker renders for every phoneme lab on the page.
-    let worker = null;
-    let nextJob = 1;
-    const jobs = new Map();
-    async function renderInWorker(job) {
-        if (!worker) {
-            const [bytes, url] = await Promise.all([loadWasm(), loadWorkerUrl()]);
-            if (!worker) {
-                worker = new Worker(url);
-                worker.onmessage = ev => {
-                    const done = jobs.get(ev.data.id);
-                    jobs.delete(ev.data.id);
-                    if (!done) return;
-                    if (ev.data.error) done.reject(new Error(ev.data.error));
-                    else done.resolve(ev.data);
-                };
-                worker.onerror = ev => {
-                    jobs.forEach(done => done.reject(new Error(ev.message || 'Speaker worker failed')));
-                    jobs.clear();
-                    worker = null;
-                };
-                worker.postMessage({ id: 0, wasm: bytes, settings: [], text: '', sampleRate: DEFAULT_SAMPLE_RATE });
-            }
-        }
-        const id = nextJob++;
-        return new Promise((resolve, reject) => {
-            jobs.set(id, { resolve, reject });
-            worker.postMessage({ id, ...job });
-        });
-    }
-
-    /** 16-bit mono WAV from samples between -1 and 1. */
-    function encodeWav(samples, sampleRate) {
-        const view = new DataView(new ArrayBuffer(44 + samples.length * 2));
-        const text = (offset, value) => {
-            for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
-        };
-        text(0, 'RIFF');
-        view.setUint32(4, 36 + samples.length * 2, true);
-        text(8, 'WAVE');
-        text(12, 'fmt ');
-        view.setUint32(16, 16, true);
-        view.setUint16(20, 1, true);
-        view.setUint16(22, 1, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, sampleRate * 2, true);
-        view.setUint16(32, 2, true);
-        view.setUint16(34, 16, true);
-        text(36, 'data');
-        view.setUint32(40, samples.length * 2, true);
-        for (let i = 0; i < samples.length; i++) {
-            const s = Math.max(-1, Math.min(1, samples[i]));
-            view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-        }
-        return new Blob([view.buffer], { type: 'audio/wav' });
-    }
-
     const chartButtons = (list, vowel) => list.map(([symbol, ipa, word]) =>
         `<button type="button" data-symbol="${symbol}${vowel ? '1' : ''}" data-ipa="${ipa}" data-word="${word}" aria-label="${symbol}, ${ipa} as in ${word}" title="${ipa} as in ${word}"><span class="sym">${symbol}</span><span class="ipa">${ipa}</span></button>`
     ).join('');
@@ -151,54 +54,36 @@
         `<button type="button" class="ipa-only" data-ipa="${ipa}" aria-label="${name}" title="${name}" hidden><span class="ipa">${ipa}</span></button>`
     ).join('');
     const exampleButtons = EXAMPLES.map(([label], i) => `<button type="button" data-example="${i}">${label}</button>`).join('');
-    const presetButtons = Object.keys(PRESETS).map(name => `<button type="button" data-preset="${name}">${name}</button>`).join('');
-    const sliders = SLIDERS.map(s =>
-        `<label class="slider"><span class="name">${s.label}</span><output aria-hidden="true"></output><input type="range" data-key="${s.key}" aria-label="${s.label}" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.value}"></label>`
-    ).join('');
 
     webui.define("app-phoneme-lab", {
         constructor() {
             const t = this;
-            t._values = {};
             t._notation = 'arpabet';
             t._texts = { arpabet: EXAMPLES[0][1], ipa: EXAMPLES[0][2] };
+            // t.template is emptied once it moves into the shadow root, so find everything needed later now.
             t._text = t.template.querySelector('textarea');
             t._textLabel = t.template.querySelector('.text span');
             t._hint = t.template.querySelector('#hint');
             t._chartHint = t.template.querySelector('.chart .hint');
-            // t.template is emptied once it moves into the shadow root, so find everything needed later now.
             t._notationButtons = [...t.template.querySelectorAll('[data-notation]')];
             t._chartSymbols = [...t.template.querySelectorAll('.chart [data-symbol]')];
             t._ipaOnly = [...t.template.querySelectorAll('.ipa-only')];
+            t._timeline = t.template.querySelector('.timeline');
+            t._player = t.template.querySelector('app-speech-player');
+            t._voice = t.template.querySelector('app-voice-controls');
+            t._text.value = t._texts.arpabet;
             t._notationButtons.forEach(button => {
                 button.addEventListener('click', () => t.setNotation(button.dataset.notation));
             });
-            t._speak = t.template.querySelector('.speak');
-            t._save = t.template.querySelector('.save');
-            t._status = t.template.querySelector('.status');
-            t._timeline = t.template.querySelector('.timeline');
-            t._inputs = [...t.template.querySelectorAll('input[type=range]')];
-            t._text.value = t._texts.arpabet;
-            t._loop = t.template.querySelector('.loop');
-            t._inputs.forEach(input => {
-                t.showValue(input);
-                input.addEventListener('input', () => {
-                    t.showValue(input);
-                    t.prepareNextLoop();
-                });
-            });
             t._text.addEventListener('input', () => {
                 t._text.removeAttribute('aria-invalid');
-                t.prepareNextLoop();
+                t.changed();
             });
-            t._loop.addEventListener('click', () => {
-                t._looping = !t._looping;
-                t._loop.setAttribute('aria-pressed', String(t._looping));
-            });
+            t._voice.addEventListener('input', () => t.changed());
             t._text.addEventListener('keydown', ev => {
                 if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
                     ev.preventDefault();
-                    t.toggleSpeak();
+                    t._player.toggle?.();
                 }
             });
             t.template.querySelectorAll('.chart button').forEach(button => {
@@ -211,52 +96,21 @@
                 button.addEventListener('click', () => {
                     t._text.value = EXAMPLES[Number(button.dataset.example)][t._notation === 'ipa' ? 2 : 1];
                     t._text.removeAttribute('aria-invalid');
-                    t.prepareNextLoop();
+                    t.changed();
                 });
             });
-            t.template.querySelectorAll('[data-preset]').forEach(button => {
-                button.addEventListener('click', () => t.applyPreset(button.dataset.preset));
-            });
-            t._speak.addEventListener('click', () => t.toggleSpeak());
-            t._save.addEventListener('click', () => t.saveWav());
+            t._player.getJob = () => ({ text: t._text.value, notation: t._notation, settings: t._voice.settings });
+            t._player.describe = reading => {
+                const count = reading.items.filter(item => !/^[,.!?|‖]$/.test(reading.text.slice(item.from, item.to))).length;
+                return `${count} phonemes, ${reading.seconds.toFixed(1)} seconds${reading.done ? '.' : ' so far…'}`;
+            };
+            t._player.parseErrorMessage = (job, error) => t.showParseError(job, error);
+            t._player.addEventListener('reading', ev => t.showTimeline(ev.detail));
+            t._player.addEventListener('item', ev => t.highlight(ev.detail));
         },
-        connected() { },
-        disconnected() {
-            const t = this;
-            // Moving the element fires disconnected then reconnected. Only shut down if it has really left the page.
-            setTimeout(() => {
-                if (!t.isConnected) t.shutdown();
-            }, 0);
-        },
-        showValue(input) {
-            const slider = SLIDERS.find(s => s.key === input.dataset.key);
-            const value = Number(input.value);
-            const text = slider.show(value);
-            input.previousElementSibling.textContent = text;
-            input.setAttribute('aria-valuetext', text);
-            this._values[slider.key] = value;
-        },
-        applyPreset(name) {
-            const t = this;
-            const preset = PRESETS[name];
-            t._inputs.forEach(input => {
-                if (input.dataset.key in preset) {
-                    input.value = preset[input.dataset.key];
-                    t.showValue(input);
-                }
-            });
-            t.prepareNextLoop();
-        },
-        /**
-         * While looping, renders the next pass in the background shortly after a change, so it is ready when the
-         * current pass ends. The render is cached, so the next pass picks it up without waiting.
-         */
-        prepareNextLoop() {
-            const t = this;
-            if (!t._looping || !t._source || !t._ctx) return;
-            clearTimeout(t._prepareTimer);
-            const sampleRate = t._ctx.sampleRate;
-            t._prepareTimer = setTimeout(() => t.render(sampleRate, true), 150);
+        /** Tells the player the text or settings changed, so a loop renders its next pass ahead of time. */
+        changed() {
+            this._player.changed?.();
         },
         /**
          * Switches between ARPAbet and IPA. Each notation keeps its own text, so switching back finds it as it was.
@@ -283,7 +137,7 @@
                 button.querySelector('.sym').hidden = ipa;
             });
             t._ipaOnly.forEach(element => { element.hidden = !ipa; });
-            t.prepareNextLoop();
+            t.changed();
         },
         /** Inserts IPA at the cursor as it is. Sounds in a word need no spaces. */
         insertIpa(symbol) {
@@ -295,6 +149,7 @@
             const cursor = start + symbol.length;
             t._text.setSelectionRange(cursor, cursor);
             t._text.removeAttribute('aria-invalid');
+            t.changed();
         },
         /** Inserts a phoneme at the cursor, with spaces around it. */
         insert(symbol) {
@@ -310,182 +165,45 @@
             const cursor = before.length + lead.length + symbol.length + trail.length;
             t._text.setSelectionRange(cursor, cursor);
             t._text.removeAttribute('aria-invalid');
+            t.changed();
         },
-        /**
-         * Renders the text with the current settings, or reuses the last render if nothing changed. A quiet render
-         * only fills the cache, leaving the status, text box, and timeline alone.
-         */
-        async render(sampleRate, quiet = false) {
-            const t = this;
-            const text = t._text.value;
-            const notation = t._notation;
-            if (!text.trim()) {
-                if (!quiet) t._status.textContent = 'Type some phonemes first, or pick an example.';
-                return null;
-            }
-            const settings = Object.keys(PARAM).map(key => [PARAM[key], t._values[key]]);
-            const key = JSON.stringify([text, notation, settings, sampleRate]);
-            if (t._rendered?.key !== key) {
-                if (t._pending?.key !== key) {
-                    t._pending = { key, job: renderInWorker({ text, notation, settings, sampleRate }) };
-                }
-                const pending = t._pending;
-                if (!quiet) t._status.textContent = 'Rendering…';
-                let result;
-                try {
-                    result = await pending.job;
-                } catch (error) {
-                    console.error('Phoneme lab rendering failed', error);
-                    if (!quiet) t._status.textContent = 'Sorry, the speech could not be rendered in this browser.';
-                    return null;
-                } finally {
-                    if (t._pending === pending) t._pending = null;
-                }
-                if (result.parseError) {
-                    return quiet ? null : t.showParseError(text, notation, result.parseError);
-                }
-                // A newer render may have finished while this one waited.
-                if (t._rendered?.key !== key) t._rendered = { key, text, ...result };
-            }
-            if (quiet) return t._rendered;
-            const rendered = t._rendered;
-            if (t._shown !== rendered) {
-                t._shown = rendered;
-                t.showTimeline(rendered);
-            }
-            const seconds = (rendered.samples.length / rendered.sampleRate).toFixed(1);
-            const count = rendered.items.filter(item => !/^[,.!?|‖]$/.test(rendered.text.slice(item.from, item.to))).length;
-            t._status.textContent = `${count} phonemes, ${seconds} seconds.`;
-            return rendered;
-        },
-        /** Selects the text that can't be read and explains why. Returns null, for render to pass on. */
-        showParseError(text, notation, { start, end }) {
+        /** Selects the text that can't be read, and returns why for the status. */
+        showParseError(job, { start, end }) {
             const t = this;
             // The text box may have changed to the other notation while this rendered.
-            if (notation !== t._notation || t._text.value !== text) return null;
-            t._text.setAttribute('aria-invalid', 'true');
-            t._text.setSelectionRange(start, end);
-            t._status.textContent = NOTATIONS[notation].error(text.slice(start, end));
-            return null;
+            if (job.notation === t._notation && t._text.value === job.text) {
+                t._text.setAttribute('aria-invalid', 'true');
+                t._text.setSelectionRange(start, end);
+            }
+            return NOTATIONS[job.notation].error(job.text.slice(start, end));
         },
-        showTimeline(rendered) {
+        showTimeline(reading) {
             const t = this;
-            const chips = rendered.items.map(item => {
+            const chips = reading.items.map(item => {
                 const chip = document.createElement('span');
-                chip.textContent = rendered.text.slice(item.from, item.to);
+                chip.textContent = reading.text.slice(item.from, item.to);
                 chip.style.flexGrow = String(item.end - item.start);
                 return chip;
             });
+            t._current = null;
             t._timeline.replaceChildren(...chips);
             t._chips = chips;
         },
-        async toggleSpeak() {
+        /** Highlights the phoneme being spoken, or none for -1. */
+        highlight(index) {
             const t = this;
-            if (t._source) {
-                t._stopAsked = true;
-                t._source.stop();
-                return;
-            }
-            // The AudioContext has to be made inside the click, for browsers' autoplay rules.
-            if (!t._ctx) t._ctx = new AudioContext();
-            t._ctx.resume();
-            t._speak.disabled = true;
-            const rendered = await t.render(t._ctx.sampleRate);
-            t._speak.disabled = false;
-            if (!rendered || !t._ctx) return;
-            t._stopAsked = false;
-            t.play(rendered);
-        },
-        play(rendered) {
-            const t = this;
-            const buffer = t._ctx.createBuffer(1, rendered.samples.length, rendered.sampleRate);
-            buffer.copyToChannel(rendered.samples, 0);
-            const source = t._ctx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(t._ctx.destination);
-            source.onended = () => t.stopped(source);
-            t._source = source;
-            t._startedAt = t._ctx.currentTime;
-            source.start();
-            t._speak.textContent = 'Stop';
-            t._speak.setAttribute('aria-pressed', 'true');
-            t.follow(rendered);
-        },
-        async stopped(source) {
-            const t = this;
-            if (t._source !== source) return;
-            t._chips?.forEach(chip => chip.classList.remove('now'));
-            if (t._looping && !t._stopAsked && t._ctx && t.isConnected) {
-                // Play again with the current text and settings. Usually already rendered by prepareNextLoop.
-                const rendered = await t.render(t._ctx?.sampleRate);
-                if (rendered && t._source === source && !t._stopAsked && t._ctx) {
-                    t.play(rendered);
-                    return;
-                }
-            }
-            if (t._source !== source) return;
-            t._source = null;
-            t._speak.textContent = 'Speak';
-            t._speak.setAttribute('aria-pressed', 'false');
-        },
-        /** Highlights the phoneme being spoken. */
-        follow(rendered) {
-            const t = this;
-            let current = null;
-            // Each pass of a loop follows on its own. An earlier pass's frames stop when a new pass starts.
-            const pass = t._pass = (t._pass || 0) + 1;
-            const frame = () => {
-                if (pass !== t._pass || !t._source || !t._ctx || !t.isConnected) return;
-                const sample = (t._ctx.currentTime - t._startedAt) * rendered.sampleRate;
-                const index = rendered.items.findIndex(item => sample >= item.start && sample < item.end);
-                const chip = index >= 0 ? t._chips[index] : null;
-                if (chip !== current) {
-                    current?.classList.remove('now');
-                    chip?.classList.add('now');
-                    current = chip;
-                }
-                requestAnimationFrame(frame);
-            };
-            requestAnimationFrame(frame);
-        },
-        async saveWav() {
-            const t = this;
-            t._save.disabled = true;
-            const rendered = await t.render(t._ctx?.sampleRate || DEFAULT_SAMPLE_RATE);
-            t._save.disabled = false;
-            if (!rendered) return;
-            const url = URL.createObjectURL(encodeWav(rendered.samples, rendered.sampleRate));
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `vocal-bin-phoneme-lab-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.wav`;
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 10000);
-            const seconds = (rendered.samples.length / rendered.sampleRate).toFixed(1);
-            t._status.textContent = `Saved ${seconds} seconds as ${link.download}`;
-        },
-        shutdown() {
-            const t = this;
-            clearTimeout(t._prepareTimer);
-            const source = t._source;
-            t._source = null;
-            source?.stop();
-            t._ctx?.close();
-            t._ctx = null;
-            t._speak.disabled = false;
-            t._speak.textContent = 'Speak';
-            t._speak.setAttribute('aria-pressed', 'false');
+            const chip = index >= 0 ? t._chips?.[index] || null : null;
+            if (chip === t._current) return;
+            t._current?.classList.remove('now');
+            chip?.classList.add('now');
+            t._current = chip;
         },
         shadowTemplate: `
 <div class="row notation" role="group" aria-label="Notation"><span>Write in</span><button type="button" data-notation="arpabet" aria-pressed="true">ARPAbet</button><button type="button" data-notation="ipa" aria-pressed="false">IPA</button></div>
 <label class="text"><span>Phonemes (ARPAbet)</span><textarea rows="3" maxlength="4000" spellcheck="false" autocapitalize="characters" aria-describedby="hint"></textarea></label>
 <p id="hint" class="hint">Separate phonemes with spaces. Vowels take a stress number: 1 stressed, 2 secondary, 0 unstressed. A comma pauses, and a period or question mark ends a sentence. Ctrl+Enter speaks. Loop repeats the speech and picks up your changes on each pass.</p>
 <div class="row examples" role="group" aria-label="Examples">${exampleButtons}</div>
-<div class="row">
-<button type="button" class="speak" aria-pressed="false">Speak</button>
-<button type="button" class="loop" aria-pressed="false">Loop</button>
-<button type="button" class="save">Save WAV</button>
-<span class="status" role="status" aria-live="polite"></span>
-</div>
+<app-speech-player loop file-prefix="vocal-bin-phoneme-lab" busy-text="Rendering…" empty-text="Type some phonemes first, or pick an example."></app-speech-player>
 <div class="timeline" aria-hidden="true"></div>
 <details class="chart">
 <summary>Phoneme chart</summary>
@@ -494,8 +212,7 @@
 <fieldset><legend>Consonants</legend>${chartButtons(CONSONANTS, false)}</fieldset>
 <fieldset class="ipa-only" hidden><legend>Reduced vowels and stress</legend>${ipaOnlyButtons}</fieldset>
 </details>
-<fieldset class="presets"><legend>Voice</legend>${presetButtons}</fieldset>
-<fieldset class="sliders"><legend>Shape the voice</legend>${sliders}</fieldset>
+<app-voice-controls></app-voice-controls>
 <style type="text/css">
 :host {
 display:grid;
@@ -541,16 +258,7 @@ background-color:var(--color-background-offset, #fff);
 color:var(--color-primary);
 padding:0.5em 1em;
 }
-button[aria-pressed="true"] {
-background-color:var(--color-primary);
-color:var(--color-primary-offset, #fff);
-}
-button:disabled {
-opacity:0.6;
-cursor:default;
-}
 button:focus-visible,
-input:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
 outline:2px solid var(--color-focus, currentColor);
@@ -562,14 +270,13 @@ display:none !important;
 .notation button {
 padding:0.3em 0.9em;
 }
+.notation button[aria-pressed="true"] {
+background-color:var(--color-primary);
+color:var(--color-primary-offset, #fff);
+}
 .examples button {
 padding:0.3em 0.7em;
 font-size:0.9em;
-}
-.speak,
-.save {
-min-width:7em;
-font-weight:bold;
 }
 .timeline {
 display:flex;
@@ -629,25 +336,6 @@ font-weight:bold;
 }
 .ipa {
 font-size:0.85em;
-}
-.sliders {
-display:grid;
-grid-template-columns:repeat(auto-fit, minmax(16em, 1fr));
-gap:0.8em 1.5em;
-}
-.slider {
-display:grid;
-grid-template-columns:1fr auto;
-gap:0.2em;
-}
-.slider output {
-font-size:0.9em;
-opacity:0.85;
-}
-.slider input {
-grid-column:1 / -1;
-width:100%;
-accent-color:var(--color-title);
 }
 </style>
 `
