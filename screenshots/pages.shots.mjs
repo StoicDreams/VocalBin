@@ -1,9 +1,9 @@
-import { test, openPage, pageRoutes, pageScreenshotFile, PAGE_SCREENSHOTS } from '../tests/support/site.mjs';
+import { test, openPage, screenshotRoutes, pageScreenshotFile, PAGE_SCREENSHOTS } from '../tests/support/site.mjs';
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// Captures one screenshot of every page the site links to, for marketing and for reviewing the design.
+// Captures one screenshot of every page in nav.json, the site's main navigation, for marketing and design reviews.
 // This file is the same in every site. Run it with PowerShell/screenshots.ps1, which Publish.ps1 runs.
 // Each image is saved under webapp/root_files/img/screenshots/pages, named after its route ("/" is root.png),
 // and an image whose page no longer exists is deleted.
@@ -14,7 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const setupFile = join(dirname(fileURLToPath(import.meta.url)), 'pages.setup.mjs');
 const site = existsSync(setupFile) ? await import(pathToFileURL(setupFile).href) : {};
-const routes = pageRoutes();
+const routes = screenshotRoutes();
 
 function removeOldScreenshots() {
     const keep = new Set(routes.map(pageScreenshotFile));

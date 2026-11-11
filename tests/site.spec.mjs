@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
     test, expect, openPage, undefinedComponents,
     WEBAPP, ROOT_FILES, readJson, readText, siteOrigin, pageFiles, routeToFile, navRoutes, sitemapUrls,
-    pageRoutes, pageScreenshotFile, isDynamicRoute, resolveSiteFile, relativeToSite, themeVariables, themeContrastProblems, normalizeThemeValue,
+    pageRoutes, screenshotRoutes, pageScreenshotFile, isDynamicRoute, resolveSiteFile, relativeToSite, themeVariables, themeContrastProblems, normalizeThemeValue,
 } from './support/site.mjs';
 import config from './site.config.mjs';
 
@@ -102,9 +102,9 @@ test.describe('site files', () => {
 });
 
 test.describe('pages', () => {
-    test('every page has a screenshot from screenshots/pages.shots.mjs', () => {
+    test('every page in nav.json has a screenshot from screenshots/pages.shots.mjs', () => {
         // PowerShell/screenshots.ps1 takes them, and Publish.ps1 runs it before the tests.
-        const missing = pageRoutes().filter(route => !existsSync(pageScreenshotFile(route)));
+        const missing = screenshotRoutes().filter(route => !existsSync(pageScreenshotFile(route)));
         expect(missing, 'Run PowerShell/screenshots.ps1 to capture these pages').toEqual([]);
     });
 

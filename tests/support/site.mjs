@@ -126,6 +126,15 @@ export function pageRoutes() {
     return siteRoutes().filter(route => !isDynamicRoute(route) && !resolveSiteFile(route));
 }
 
+/** The pages screenshots/pages.shots.mjs captures: every page in nav.json, the site's main navigation. */
+export function screenshotRoutes() {
+    return [...new Set(navRoutes()
+        .filter(route => route.startsWith('/') && !route.startsWith('//'))
+        .map(route => route.replace(/[?#].*$/, '') || '/'))]
+        .filter(route => !isDynamicRoute(route) && !resolveSiteFile(route))
+        .sort();
+}
+
 /** Where screenshots/pages.shots.mjs saves a page's screenshot. "/" is root.png, like d/root.md. */
 export const PAGE_SCREENSHOTS = join(ROOT_FILES, 'img', 'screenshots', 'pages');
 export function pageScreenshotFile(route) {
