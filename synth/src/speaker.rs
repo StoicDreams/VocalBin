@@ -3,9 +3,11 @@
 //! vowel lab's glides. Nothing here depends on the language: the sounds come from the language's table, and the
 //! steps from each sound's [`Kind`] and [`Place`].
 //!
-//! Intonation here is deliberately simple (stage 3 is prosody): pitch drifts down across a phrase, stressed vowels
-//! rise, and the phrase ends falling, or rising for `?`.
+//! Stage 3 reads ordinary text with the language's reader, which also sets each vowel's pitch (its intonation). IPA
+//! and ARPAbet have no such pitch, so for them the speaker's own simple intonation applies: pitch drifts down across
+//! a phrase, stressed vowels rise, and the phrase ends falling, or rising for `?`.
 
+use crate::dictionary::Dictionary;
 use crate::english::{ENGLISH, parse_arpabet};
 use crate::language::{Language, Notation};
 use crate::phonemes::{Kind, NEUTRAL, ParseError, Phoneme, Place, Token, burst};
@@ -43,6 +45,7 @@ pub struct Speaker {
     left: u32,
     length: u32,
     block: Vec<f32>,
+    transcript: String,
 }
 
 impl Speaker {
@@ -58,6 +61,7 @@ impl Speaker {
             left: 0,
             length: 0,
             block: Vec::new(),
+            transcript: String::new(),
         }
     }
 
@@ -82,14 +86,32 @@ impl Speaker {
         self.language = language;
     }
 
-    /// Prepares `text` to be rendered from its start. On an error, nothing changes.
+    /// Prepares `text` to be rendered from its start. Ordinary text is read without a dictionary, so every word comes
+    /// from spelling rules; use `speak_text` to give it one. On an error, nothing changes.
     pub fn speak(&mut self, text: &str, notation: Notation) -> Result<(), ParseError> {
         let tokens = match notation {
             Notation::Ipa => self.language.parse_ipa(text)?,
             Notation::Arpabet => parse_arpabet(text)?,
+            Notation::Text => return self.speak_text(text, None),
         };
         self.speak_tokens(&tokens);
+        self.transcript.clear();
         Ok(())
+    }
+
+    /// Prepares ordinary text in the speaker's language, with its pronouncing dictionary if one is loaded. Afterwards
+    /// `transcript` has what will be said, in IPA. On an error, nothing changes.
+    pub fn speak_text(&mut self, text: &str, dictionary: Option<&Dictionary>) -> Result<(), ParseError> {
+        let read = self.language.read_text.ok_or(ParseError { offset: 0, len: text.len() })?;
+        let reading = read(text, dictionary)?;
+        self.speak_tokens(&reading.tokens);
+        self.transcript = reading.transcript;
+        Ok(())
+    }
+
+    /// What the last ordinary text will sound like, in IPA, a word at a time. Empty for IPA or ARPAbet.
+    pub fn transcript(&self) -> &str {
+        &self.transcript
     }
 
     /// Prepares phonemes that are already read, such as from a dictionary, to be rendered from their start.
@@ -162,6 +184,7 @@ impl Speaker {
 struct Phone {
     phoneme: &'static Phoneme,
     stress: u8,
+    tone: Option<(f32, f32)>,
     offset: usize,
     len: usize,
 }
@@ -188,7 +211,7 @@ fn plan(tokens: &[Token], sample_rate: f32, rate: f32, intonation: f32) -> (Vec<
         let phones: Vec<Phone> = tokens[start..end]
             .iter()
             .filter_map(|t| match *t {
-                Token::Phone { phoneme, stress, offset, len } => Some(Phone { phoneme, stress, offset, len }),
+                Token::Phone { phoneme, stress, tone, offset, len } => Some(Phone { phoneme, stress, tone, offset, len }),
                 _ => None,
             })
             .collect();
@@ -231,10 +254,23 @@ fn speak_phrase(
     let vowels: Vec<usize> = (0..phones.len()).filter(|&i| phones[i].phoneme.is_vowel()).collect();
     let last_vowel = vowels.last().copied();
 
-    // Pitch: a gentle fall across the phrase, a lift on stressed vowels, and the phrase's ending.
+    // Pitch at the start and end of each phone. A language's intonation sets the vowels' tones, and a consonant takes
+    // the pitch where the voice is. Without tones, the speaker's simple intonation applies.
     let mut pitch = vec![1.0_f32; phones.len()];
+    let mut pitch_end = vec![1.0_f32; phones.len()];
+    let tones = phones.iter().any(|p| p.tone.is_some());
     let mut current = 1.0;
     for i in 0..phones.len() {
+        if tones {
+            if let Some((start, end)) = phones[i].tone {
+                pitch[i] = 1.0 + intonation * start;
+                current = 1.0 + intonation * end;
+            } else {
+                pitch[i] = current;
+            }
+            pitch_end[i] = current;
+            continue;
+        }
         if let Some(n) = vowels.iter().position(|&v| v == i) {
             let progress = if vowels.len() > 1 { n as f32 / (vowels.len() - 1) as f32 } else { 0.0 };
             let declination = 1.0 - 0.10 * intonation * progress;
@@ -254,11 +290,16 @@ fn speak_phrase(
             };
         }
         pitch[i] = current;
+        pitch_end[i] = current;
     }
     // Consonants before the first vowel take its pitch.
     if let Some(&first) = vowels.first() {
+        let start = if tones { pitch[first] } else { 1.0 + 0.10 * intonation };
         for p in pitch.iter_mut().take(first) {
-            *p = 1.0 + 0.10 * intonation;
+            *p = start;
+        }
+        for p in pitch_end.iter_mut().take(first) {
+            *p = start;
         }
     }
 
@@ -298,9 +339,14 @@ fn speak_phrase(
                     None => 40.0,
                 };
                 let vowel = Controls { formants: p.formants, glide_ms, voicing: 1.0, ..base };
+                let end_pitch = pitch_end[i];
                 if p.kind == Kind::Diphthong {
                     push(ms * 0.4, vowel, steps);
-                    push(ms * 0.6, Controls { formants: p.end, glide_ms: ms * 0.6, ..vowel }, steps);
+                    push(ms * 0.6, Controls { formants: p.end, glide_ms: ms * 0.6, pitch_scale: end_pitch, ..vowel }, steps);
+                } else if end_pitch != pitch[i] {
+                    // A rise or fall within the vowel.
+                    push(ms * 0.45, vowel, steps);
+                    push(ms * 0.55, Controls { pitch_scale: end_pitch, ..vowel }, steps);
                 } else {
                     push(ms, vowel, steps);
                 }
@@ -555,6 +601,49 @@ mod tests {
     #[test]
     fn ipa_and_arpabet_sound_the_same() {
         assert_eq!(spoken("HH AH0 L OW1 , W ER1 L D .").1, spoken_ipa("həˈloʊ, ˈwɝld.").1);
+    }
+
+    fn spoken_text(text: &str) -> (Speaker, Vec<f32>) {
+        let mut s = Speaker::new(SR);
+        s.set(param::ROUGHNESS, 0.0);
+        s.speak_text(text, Some(crate::dictionary::english_for_tests())).unwrap();
+        let mut out = vec![0.0; s.length() as usize];
+        s.render(&mut out);
+        (s, out)
+    }
+
+    #[test]
+    fn reads_ordinary_text() {
+        let (s, out) = spoken_text("Hello, world!");
+        assert_eq!(s.transcript(), "həˈloʊ, ˈwɝld!");
+        assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 1.0) && rms(&out) > 0.01);
+        // Every sound points at its word: "Hello" is bytes 0 to 5, "world" 7 to 12, and the marks follow them.
+        let places: Vec<(u32, u32)> = s.items().iter().map(|i| (i.offset, i.len)).collect();
+        assert_eq!(places, [(0, 5), (0, 5), (0, 5), (0, 5), (5, 1), (7, 5), (7, 5), (7, 5), (7, 5), (12, 1)]);
+    }
+
+    #[test]
+    fn text_questions_rise_and_statements_fall() {
+        let end_pitch = |text: &str| {
+            let (mut s, _) = spoken_text("");
+            s.speak_text(text, Some(crate::dictionary::english_for_tests())).unwrap();
+            let last = s.items()[s.items().len() - 2];
+            let mut out = vec![0.0; last.end as usize];
+            s.render(&mut out);
+            s.pitch()
+        };
+        let question = end_pitch("Is it raining?");
+        let statement = end_pitch("It is raining.");
+        assert!(question > 120.0 && statement < 100.0, "question {question} Hz, statement {statement} Hz");
+    }
+
+    #[test]
+    fn text_without_a_dictionary_uses_spelling_rules() {
+        let mut s = Speaker::new(SR);
+        s.speak("Hello there.", Notation::Text).unwrap();
+        assert!(s.length() > 0 && !s.transcript().is_empty());
+        s.speak("HH AY1", Notation::Arpabet).unwrap();
+        assert_eq!(s.transcript(), "");
     }
 
     #[test]

@@ -1,7 +1,18 @@
 //! A language, as the engine sees it: its table of sounds, named in IPA, and the other ways people write them.
 //! Adding a language means adding a table like `english.rs`. The speaker and the IPA reader stay the same.
 
+use crate::dictionary::Dictionary;
 use crate::phonemes::{MAX_TOKENS, ParseError, Phoneme, Token};
+
+/// Text read aloud: the sounds to speak, and the same sounds written in IPA, one word at a time, for people to see.
+#[derive(Debug, Default, PartialEq)]
+pub struct Reading {
+    pub tokens: Vec<Token>,
+    pub transcript: String,
+}
+
+/// Reads ordinary text in a language, with its pronouncing dictionary when one is loaded.
+pub type TextReader = fn(&str, Option<&Dictionary>) -> Result<Reading, ParseError>;
 
 pub struct Language {
     /// A BCP 47 tag, such as `en-US`.
@@ -12,6 +23,9 @@ pub struct Language {
     /// Other ways people write these sounds in IPA, each read as one or more of `phonemes` by their symbols. For
     /// example English reads `r` as `ɹ`, and the British `əʊ` as `oʊ`.
     pub aliases: &'static [(&'static str, &'static [&'static str])],
+    /// Reads ordinary text: numbers, words, and punctuation, with pronunciations, stress, and intonation. `None`
+    /// for a language that can only be written in IPA so far.
+    pub read_text: Option<TextReader>,
 }
 
 /// How the text given to the speaker is written.
@@ -21,6 +35,8 @@ pub enum Notation {
     Ipa,
     /// ARPAbet, the CMU Pronouncing Dictionary's notation. English only.
     Arpabet,
+    /// Ordinary text in the speaker's language.
+    Text,
 }
 
 impl Notation {
@@ -28,6 +44,7 @@ impl Notation {
         match n {
             0 => Some(Notation::Arpabet),
             1 => Some(Notation::Ipa),
+            2 => Some(Notation::Text),
             _ => None,
         }
     }
@@ -113,7 +130,7 @@ impl Language {
                 let (sounds, len) = self.longest_match(&text[i..]).ok_or(ParseError { offset: i, len: width })?;
                 for phoneme in sounds {
                     let stress = if phoneme.is_vowel() { word.pending.take().unwrap_or(0) } else { 0 };
-                    tokens.push(Token::Phone { phoneme, stress, offset: i, len });
+                    tokens.push(Token::Phone { phoneme, stress, tone: None, offset: i, len });
                 }
                 i += len;
                 continue;

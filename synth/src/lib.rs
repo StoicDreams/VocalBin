@@ -5,11 +5,14 @@
 //!   noise through parallel resonators.
 //! - Stage 1, [`Synth`]: one vowel at a time, gliding between them. The vowel lab runs it in an `AudioWorklet`.
 //! - Stage 2, [`Speaker`]: phonemes in IPA or ARPAbet, rendered ahead of playback in a Web Worker for the phoneme lab.
+//! - Stage 3: ordinary text, read by the language with a pronouncing [`Dictionary`] loaded from a file, with
+//!   intonation. The text-to-speech page uses the same worker.
 //! - Sounds are named in IPA. Each [`Language`] brings its own table of them, so adding a language means adding a
 //!   table like [`ENGLISH`], not changing the speaker.
 //!
 //! The pages load this crate as raw WebAssembly through the `vb_*` functions below, without wasm-bindgen.
 
+mod dictionary;
 mod english;
 mod filter;
 mod glottal;
@@ -22,8 +25,9 @@ mod vowels;
 
 pub use filter::{Glide, Resonator};
 pub use glottal::LfPulse;
+pub use dictionary::{Dictionary, Sound};
 pub use english::{ARPABET, Arpabet, ENGLISH, parse_arpabet};
-pub use language::{Language, Notation};
+pub use language::{Language, Notation, Reading, TextReader};
 pub use phonemes::{Kind, ParseError, Phoneme, Place, Token};
 pub use speaker::{Item, Speaker};
 pub use synth::Synth;
@@ -117,9 +121,9 @@ mod wasm {
         }
     }
 
-    /// Prepares the UTF-8 text at `text` to be rendered, written in `notation` (0 ARPAbet, 1 IPA). Returns -1 when
-    /// it reads, or else the byte offset of the first thing it can't read, whose length `vb_speaker_error_len` then
-    /// gives.
+    /// Prepares the UTF-8 text at `text` to be rendered, written in `notation` (0 ARPAbet, 1 IPA, 2 ordinary text
+    /// without a dictionary). Returns -1 when it reads, or else the byte offset of the first thing it can't read,
+    /// whose length `vb_speaker_error_len` then gives.
     ///
     /// # Safety
     /// `speaker` must come from `vb_speaker_new`, and `text` must point to `len` bytes.
@@ -129,7 +133,11 @@ mod wasm {
         let Some(notation) = crate::Notation::from_number(notation) else { return 0 };
         let bytes = unsafe { std::slice::from_raw_parts(text, len as usize) };
         let Ok(text) = std::str::from_utf8(bytes) else { return 0 };
-        match speaker.speak(text, notation) {
+        report(speaker.speak(text, notation))
+    }
+
+    fn report(result: Result<(), crate::ParseError>) -> i32 {
+        match result {
             Ok(()) => {
                 ERROR_LEN.with(|e| e.set(0));
                 -1
@@ -139,6 +147,61 @@ mod wasm {
                 error.offset as i32
             }
         }
+    }
+
+    use crate::Dictionary;
+
+    /// Reads a pronouncing dictionary file for the speakers' language (English) from the `len` bytes at `bytes`.
+    /// Returns null if the file can't be read. Free it with `vb_dictionary_free`.
+    ///
+    /// # Safety
+    /// `bytes` must point to `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vb_dictionary_load(bytes: *const u8, len: u32) -> *mut Dictionary {
+        let bytes = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
+        match Dictionary::parse(bytes, &crate::ENGLISH) {
+            Ok(dictionary) => Box::into_raw(Box::new(dictionary)),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+
+    /// # Safety
+    /// `dictionary` must come from `vb_dictionary_load` and not have been freed.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vb_dictionary_free(dictionary: *mut Dictionary) {
+        if !dictionary.is_null() {
+            drop(unsafe { Box::from_raw(dictionary) });
+        }
+    }
+
+    /// Prepares ordinary UTF-8 text at `text` to be rendered, read with `dictionary` (which may be null). Returns the
+    /// same as `vb_speaker_speak`. Afterwards `vb_speaker_transcript` has it in IPA.
+    ///
+    /// # Safety
+    /// `speaker` must come from `vb_speaker_new`, `dictionary` from `vb_dictionary_load` or be null, and `text` must
+    /// point to `len` bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vb_speaker_speak_text(speaker: *mut Speaker, dictionary: *const Dictionary, text: *const u8, len: u32) -> i32 {
+        let Some(speaker) = (unsafe { speaker.as_mut() }) else { return 0 };
+        let bytes = unsafe { std::slice::from_raw_parts(text, len as usize) };
+        let Ok(text) = std::str::from_utf8(bytes) else { return 0 };
+        report(speaker.speak_text(text, unsafe { dictionary.as_ref() }))
+    }
+
+    /// Where the transcript of the last ordinary text is, as UTF-8. `vb_speaker_transcript_len` gives its length.
+    ///
+    /// # Safety
+    /// `speaker` must come from `vb_speaker_new` and not have been freed.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vb_speaker_transcript(speaker: *const Speaker) -> *const u8 {
+        unsafe { speaker.as_ref() }.map_or(std::ptr::null(), |s| s.transcript().as_ptr())
+    }
+
+    /// # Safety
+    /// `speaker` must come from `vb_speaker_new` and not have been freed.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn vb_speaker_transcript_len(speaker: *const Speaker) -> u32 {
+        unsafe { speaker.as_ref() }.map_or(0, |s| s.transcript().len() as u32)
     }
 
     thread_local! {

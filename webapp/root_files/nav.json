@@ -5,6 +5,11 @@
         "url": "/"
     },
     {
+        "name": "Text to Speech",
+        "icon": "comment-dots",
+        "url": "/text-to-speech"
+    },
+    {
         "name": "Vowel Lab",
         "icon": "microphone",
         "url": "/vowel-lab"

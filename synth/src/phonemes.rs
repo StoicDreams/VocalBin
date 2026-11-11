@@ -137,7 +137,11 @@ pub const fn affricate(ipa: &'static str, place: Place, voiced: bool, formants: 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Token {
     /// A phoneme, with its stress for vowels (0 none, 1 primary, 2 secondary), and where it is in the text.
-    Phone { phoneme: &'static Phoneme, stress: u8, offset: usize, len: usize },
+    ///
+    /// `tone` is a vowel's pitch at its start and end, set by a language's intonation: how far above (or below) the
+    /// voice's own pitch, as a fraction, before the intonation setting scales it. A start and end that differ make
+    /// the pitch rise or fall within the vowel. With `None`, the speaker's simple intonation decides.
+    Phone { phoneme: &'static Phoneme, stress: u8, tone: Option<(f32, f32)>, offset: usize, len: usize },
     /// `,` is a short pause. `.`, `!`, and `?` end a sentence, and `?` ends it with a rise.
     Pause { mark: char, offset: usize },
 }

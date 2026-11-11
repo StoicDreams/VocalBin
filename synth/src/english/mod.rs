@@ -1,4 +1,5 @@
-//! American English: its sounds in IPA, and ARPAbet, the CMU Pronouncing Dictionary's way of writing them.
+//! American English: its sounds in IPA, ARPAbet (the CMU Pronouncing Dictionary's way of writing them), and reading
+//! ordinary text aloud (`reader`).
 //!
 //! Vowel formants are the stage 1 values (Hillenbrand et al. 1995, adult men). Consonant formants are loci: where
 //! the formants point during the consonant, which shapes the transitions into and out of it. Lengths and noise
@@ -7,7 +8,19 @@
 use crate::language::Language;
 use crate::phonemes::*;
 
-pub const ENGLISH: Language = Language { code: "en-US", name: "English (US)", phonemes: &PHONEMES, aliases: &ALIASES };
+mod letters;
+mod numbers;
+mod prosody;
+mod reader;
+mod text;
+
+pub const ENGLISH: Language = Language {
+    code: "en-US",
+    name: "English (US)",
+    phonemes: &PHONEMES,
+    aliases: &ALIASES,
+    read_text: Some(reader::read),
+};
 
 /// The 39 sounds of the CMU dictionary, plus /ə/ and /ɚ/, the unstressed forms of /ʌ/ and /ɝ/.
 pub const PHONEMES: [Phoneme; 41] = [
@@ -176,7 +189,7 @@ pub fn parse_arpabet(text: &str) -> Result<Vec<Token>, ParseError> {
             let stress = if sound.is_vowel() { stress.unwrap_or(1) } else { 0 };
             let ipa = if stress == 0 { arpabet.unstressed } else { arpabet.ipa };
             let phoneme = ENGLISH.find(ipa).expect("every ARPAbet symbol is an English sound");
-            tokens.push(Token::Phone { phoneme, stress, offset, len: end - offset });
+            tokens.push(Token::Phone { phoneme, stress, tone: None, offset, len: end - offset });
         } else {
             return Err(ParseError { offset, len: c.len_utf8() });
         }
@@ -253,7 +266,7 @@ mod tests {
     #[test]
     fn arpabet_keeps_where_each_phoneme_is() {
         let tokens = parse_arpabet("HH AY1 ?").unwrap();
-        assert_eq!(tokens[1], Token::Phone { phoneme: ENGLISH.find("aɪ").unwrap(), stress: 1, offset: 3, len: 3 });
+        assert_eq!(tokens[1], Token::Phone { phoneme: ENGLISH.find("aɪ").unwrap(), stress: 1, tone: None, offset: 3, len: 3 });
         assert_eq!(tokens[2], Token::Pause { mark: '?', offset: 7 });
     }
 
@@ -319,8 +332,8 @@ mod tests {
     fn ipa_keeps_where_each_sound_is() {
         let tokens = ENGLISH.parse_ipa("ˈtʃaɪ ?").unwrap();
         // ˈ is two bytes, tʃ three, aɪ three.
-        assert_eq!(tokens[0], Token::Phone { phoneme: ENGLISH.find("tʃ").unwrap(), stress: 0, offset: 2, len: 3 });
-        assert_eq!(tokens[1], Token::Phone { phoneme: ENGLISH.find("aɪ").unwrap(), stress: 1, offset: 5, len: 3 });
+        assert_eq!(tokens[0], Token::Phone { phoneme: ENGLISH.find("tʃ").unwrap(), stress: 0, tone: None, offset: 2, len: 3 });
+        assert_eq!(tokens[1], Token::Phone { phoneme: ENGLISH.find("aɪ").unwrap(), stress: 1, tone: None, offset: 5, len: 3 });
         assert_eq!(tokens[2], Token::Pause { mark: '?', offset: 9 });
     }
 

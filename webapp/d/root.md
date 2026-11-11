@@ -1,5 +1,5 @@
 <webui-data data-page-title="{APP_NAME}" data-page-subtitle=""></webui-data>
 
-We are building a speech synthesizer from scratch, with no recordings and no AI. Shape a single vowel in the [Vowel Lab](/vowel-lab), or speak whole words in the [Phoneme Lab](/phoneme-lab).
+We are building a speech synthesizer from scratch, with no recordings and no AI. Type English and hear it read aloud with [Text to Speech](/text-to-speech). To see how it works, shape a single vowel in the [Vowel Lab](/vowel-lab), or speak sounds one at a time in the [Phoneme Lab](/phoneme-lab).
 
 <webui-under-construction></webui-under-construction>
