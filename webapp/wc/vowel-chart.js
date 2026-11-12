@@ -19,6 +19,8 @@
         ['æ', 'had', 588, 1952], ['ʌ', 'hud', 623, 1200], ['ɑ', 'hod', 768, 1333], ['ɔ', 'hawed', 652, 997],
         ['o', 'hoed', 497, 910], ['ʊ', 'hood', 469, 1122], ['u', "who'd", 378, 997], ['ɝ', 'heard', 474, 1379],
     ];
+    // Vowels whose label goes to the left of the point, so it doesn't cover a neighbor ("æ" sits just left of "ɛ").
+    const LABEL_LEFT = new Set(['æ']);
     // Vocal tract lengths in cm, as the voice presets use. Formants scale with 17.5 / length.
     const VOICES = { Man: 17.5, Woman: 14.8, Child: 12.5 };
     const REFERENCE = 17.5;
@@ -51,7 +53,8 @@
             t.drawAxes();
             t._points = VOWELS.map(([symbol, word]) => {
                 const group = svg('g', { class: 'point' });
-                group.append(svg('circle', { r: 6 }), svg('text', { dx: 10, dy: 5 }, symbol));
+                const left = LABEL_LEFT.has(symbol);
+                group.append(svg('circle', { r: 6 }), svg('text', { dx: left ? -10 : 10, dy: 7, 'text-anchor': left ? 'end' : 'start' }, symbol));
                 group.addEventListener('pointerenter', () => t.tip(group, symbol, word));
                 group.addEventListener('pointerleave', () => { t._tip.hidden = true; });
                 t._plot.append(group);
