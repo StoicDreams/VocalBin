@@ -118,8 +118,8 @@ padding:0.5em 1em;
 }
 button:focus-visible,
 input:focus-visible {
-outline:2px solid var(--color-focus, currentColor);
-outline-offset:2px;
+outline:var(--focus-outline, 2px solid currentColor);
+outline-offset:var(--focus-offset, 2px);
 }
 .sliders {
 display:grid;

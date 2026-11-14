@@ -483,8 +483,8 @@ opacity:0.6;
 cursor:default;
 }
 button:focus-visible {
-outline:2px solid var(--color-focus, currentColor);
-outline-offset:2px;
+outline:var(--focus-outline, 2px solid currentColor);
+outline-offset:var(--focus-offset, 2px);
 }
 [hidden] {
 display:none !important;

@@ -147,8 +147,8 @@ color:var(--color-primary-offset, #fff);
 }
 button:focus-visible,
 summary:focus-visible {
-outline:2px solid var(--color-focus, currentColor);
-outline-offset:2px;
+outline:var(--focus-outline, 2px solid currentColor);
+outline-offset:var(--focus-offset, 2px);
 }
 svg {
 width:100%;
