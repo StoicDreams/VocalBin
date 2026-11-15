@@ -26,6 +26,10 @@ pub struct Language {
     /// Reads ordinary text: numbers, words, and punctuation, with pronunciations, stress, and intonation. `None`
     /// for a language that can only be written in IPA so far.
     pub read_text: Option<TextReader>,
+    /// Swaps sounds for the variants they take in context, before speaking (allophones): in American English, /t/ in
+    /// "butter" becomes the tap /ɾ/, and /p/ in "spin" loses its puff of breath. It changes only which phoneme each
+    /// token speaks, so transcripts keep the sounds as written. `None` speaks every sound as written.
+    pub allophones: Option<fn(&mut [Token])>,
 }
 
 /// How the text given to the speaker is written.

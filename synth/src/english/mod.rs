@@ -20,10 +20,11 @@ pub const ENGLISH: Language = Language {
     phonemes: &PHONEMES,
     aliases: &ALIASES,
     read_text: Some(reader::read),
+    allophones: Some(allophones),
 };
 
-/// The 39 sounds of the CMU dictionary, plus /ə/ and /ɚ/, the unstressed forms of /ʌ/ and /ɝ/.
-pub const PHONEMES: [Phoneme; 41] = [
+/// The 39 sounds of the CMU dictionary, plus /ə/ and /ɚ/, the unstressed forms of /ʌ/ and /ɝ/, and the tap /ɾ/.
+pub const PHONEMES: [Phoneme; 42] = [
     vowel("ɑ", [768.0, 1333.0, 2522.0], 200.0),
     vowel("æ", [588.0, 1952.0, 2601.0], 190.0),
     vowel("ʌ", [623.0, 1200.0, 2550.0], 140.0),
@@ -65,11 +66,57 @@ pub const PHONEMES: [Phoneme; 41] = [
     approximant("j", Place::Palatal, [260.0, 2070.0, 3020.0], 60.0),
     fricative("z", Place::Alveolar, true, [320.0, 1390.0, 2530.0], S_NOISE, 75.0),
     fricative("ʒ", Place::Postalveolar, true, [300.0, 1840.0, 2750.0], SH_NOISE, 70.0),
+    tap("ɾ", Place::Alveolar, [250.0, 1700.0, 2600.0], 26.0),
 ];
+
+/// /p/, /t/, and /k/ without their puff of breath, as after /s/ ("spin") and before an unstressed vowel ("happy").
+/// Only `allophones` uses them, so they are not in the table and IPA can't name them.
+static PLAIN_STOPS: [Phoneme; 3] = [
+    plosive("p", Place::Labial, false, [250.0, 1000.0, 2150.0], 70.0, 14.0),
+    plosive("t", Place::Alveolar, false, [250.0, 1700.0, 2600.0], 60.0, 16.0),
+    plosive("k", Place::Velar, false, [250.0, 2000.0, 2500.0], 65.0, 22.0),
+];
+
+/// American English sounds in context:
+///
+/// - **The tap:** /t/ and /d/ after a vowel or /ɹ/ and before an unstressed vowel become /ɾ/: "butter", "city",
+///   "water", and across words, "a lot of".
+/// - **Unaspirated stops:** /p/, /t/, and /k/ after /s/ ("spin", "stop", "skin"), and after a vowel or sonorant
+///   before an unstressed vowel ("happy", "rocket"), have little or no puff of breath. A stop starting a stressed
+///   syllable keeps it ("pin", "attack").
+fn allophones(tokens: &mut [Token]) {
+    let tap = &PHONEMES[PHONEMES.len() - 1];
+    for i in 0..tokens.len() {
+        let Token::Phone { phoneme, .. } = tokens[i] else { continue };
+        let before = i.checked_sub(1).and_then(|j| match tokens[j] {
+            Token::Phone { phoneme, .. } => Some(phoneme),
+            Token::Pause { .. } => None,
+        });
+        let after = match tokens.get(i + 1) {
+            Some(&Token::Phone { phoneme, stress, .. }) => Some((phoneme, stress)),
+            _ => None,
+        };
+        let unstressed_vowel_after = after.is_some_and(|(p, stress)| p.is_vowel() && stress == 0);
+        let swap = match phoneme.ipa {
+            "t" | "d" if unstressed_vowel_after && before.is_some_and(|b| b.is_vowel() || b.ipa == "ɹ") => Some(tap),
+            "p" | "t" | "k" => {
+                let after_s = before.is_some_and(|b| b.ipa == "s");
+                let sonorant_before = before.is_some_and(|b| b.is_vowel() || matches!(b.kind, Kind::Nasal | Kind::Approximant));
+                (after_s || sonorant_before && unstressed_vowel_after)
+                    .then(|| PLAIN_STOPS.iter().find(|p| p.ipa == phoneme.ipa))
+                    .flatten()
+            }
+            _ => None,
+        };
+        if let (Some(new), Token::Phone { phoneme, .. }) = (swap, &mut tokens[i]) {
+            *phoneme = new;
+        }
+    }
+}
 
 /// Other common ways to write these sounds: plain letters, tie bars and ligatures, British symbols, the flap and
 /// dark L, and syllabic consonants.
-const ALIASES: [(&str, &[&str]); 22] = [
+const ALIASES: [(&str, &[&str]); 21] = [
     ("r", &["ɹ"]),
     ("g", &["ɡ"]),
     ("e", &["eɪ"]),
@@ -87,7 +134,6 @@ const ALIASES: [(&str, &[&str]); 22] = [
     ("ɛə", &["ɛ", "ə"]),
     ("ʊə", &["ʊ", "ə"]),
     ("ɫ", &["l"]),
-    ("ɾ", &["d"]),
     ("n̩", &["ə", "n"]),
     ("l̩", &["ə", "l"]),
     ("m̩", &["ə", "m"]),
@@ -243,6 +289,40 @@ mod tests {
         }
     }
 
+    /// The phonemes each token speaks after `allophones`, as IPA with the VOT of voiceless stops, which tells the
+    /// plain ones.
+    fn spoken(text: &str) -> Vec<String> {
+        let mut tokens = parse_arpabet(text).unwrap();
+        allophones(&mut tokens);
+        tokens
+            .iter()
+            .filter_map(|t| match t {
+                Token::Phone { phoneme, .. } if phoneme.kind == Kind::Plosive && !phoneme.voiced => Some(format!("{}{}", phoneme.ipa, phoneme.release_ms)),
+                Token::Phone { phoneme, .. } => Some(phoneme.ipa.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn t_and_d_tap_between_vowels() {
+        assert_eq!(spoken("B AH1 T ER0"), ["b", "ʌ", "ɾ", "ɚ"]);
+        assert_eq!(spoken("S IH1 T IY0"), ["s", "ɪ", "ɾ", "i"]);
+        assert_eq!(spoken("L EY1 D ER0"), ["l", "eɪ", "ɾ", "ɚ"]);
+        // Not before a stressed vowel, after a consonant, or across a pause.
+        assert_eq!(spoken("AH0 T AE1 K"), ["ə", "t60", "æ", "k65"]);
+        assert_eq!(spoken("W IH1 N T ER0"), ["w", "ɪ", "n", "t16", "ɚ"]);
+        assert_eq!(spoken("B AH1 T , ER0"), ["b", "ʌ", "t60", "ɚ"]);
+    }
+
+    #[test]
+    fn stops_after_s_and_before_weak_vowels_lose_their_breath() {
+        assert_eq!(spoken("S P IH1 N"), ["s", "p14", "ɪ", "n"]);
+        assert_eq!(spoken("P IH1 N"), ["p50", "ɪ", "n"]);
+        assert_eq!(spoken("HH AE1 P IY0"), ["h", "æ", "p14", "i"]);
+        assert_eq!(spoken("S K AY1"), ["s", "k22", "aɪ"]);
+    }
+
     #[test]
     fn reads_arpabet_stress_and_pauses() {
         assert_eq!(arpabet("HH AH0 L OW1, W ER1 L D."), ["h", "ə0", "l", "oʊ1", ",", "w", "ɝ1", "l", "d", "."]);
@@ -319,7 +399,7 @@ mod tests {
         assert_eq!(ipa("ˈt͡ʃiːz"), ["tʃ", "i1", "z"]);
         assert_eq!(ipa("ˈbɜːd"), ["b", "ɝ1", "d"]);
         assert_eq!(ipa("ˈbʌtn̩"), ["b", "ʌ1", "t", "ə0", "n"]);
-        assert_eq!(ipa("ˈbʌɾɚ"), ["b", "ʌ1", "d", "ɚ0"]);
+        assert_eq!(ipa("ˈbʌɾɚ"), ["b", "ʌ1", "ɾ", "ɚ0"]);
     }
 
     #[test]

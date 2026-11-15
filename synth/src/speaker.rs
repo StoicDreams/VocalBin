@@ -6,6 +6,20 @@
 //! Stage 3 reads ordinary text with the language's reader, which also sets each vowel's pitch (its intonation). IPA
 //! and ARPAbet have no such pitch, so for them the speaker's own simple intonation applies: pitch drifts down across
 //! a phrase, stressed vowels rise, and the phrase ends falling, or rising for `?`.
+//!
+//! Stage 4 makes sounds blend as they do in speech (coarticulation), from the sounds' kinds and places:
+//!
+//! - **Consonants lean toward their vowel:** a consonant's formants point part of the way from its own locus toward
+//!   the vowel next to it, more for the lips (which leave the tongue free) than for the tongue tip. These are locus
+//!   equations, measured in many languages: F2 at a consonant's release grows with the vowel's F2 along a line whose
+//!   slope depends on the place. Velars also meet the vowel where it needs the tongue (the velar pinch).
+//! - **Weak vowels fall short:** unstressed and reduced vowels don't reach their targets, and take on the color of
+//!   the sounds around them (Lindblom's undershoot), more so when speaking fast.
+//! - **Timing:** besides stress and phrase-final lengthening, a vowel is shorter before a voiceless consonant ("bit"
+//!   against "bid"), vowels are shorter in longer words, and consonants are shorter in clusters, after Klatt's
+//!   duration rules.
+//! - **Variants:** a language can swap sounds for their variants in context first (`Language::allophones`), such as
+//!   the American tap in "butter".
 
 use crate::dictionary::Dictionary;
 use crate::english::{ENGLISH, parse_arpabet};
@@ -33,6 +47,28 @@ const TAIL_MS: f32 = 150.0;
 const COMMA_MS: f32 = 220.0;
 const SENTENCE_MS: f32 = 420.0;
 const FINAL_LENGTHENING: f32 = 1.3;
+/// A vowel before a voiceless consonant, as in "bit" against "bid".
+const BEFORE_VOICELESS: f32 = 0.85;
+/// A vowel in a word of two or more syllables. Only text marks words, so IPA and ARPAbet don't use it.
+const POLYSYLLABIC: f32 = 0.85;
+/// A consonant next to another consonant.
+const IN_CLUSTER: f32 = 0.8;
+/// How far an unstressed vowel falls short of its target toward the sounds around it, and a reduced one such as
+/// /ə/, at normal speed. Secondary stress falls short by a third of the unstressed amount.
+const UNDERSHOOT: f32 = 0.3;
+const REDUCED_UNDERSHOOT: f32 = 0.45;
+
+/// How far a consonant's F2 moves from its locus toward the vowel next to it: the slope of its locus equation.
+/// The lips leave the tongue free to take the vowel's shape, and the tongue tip holds its own place most.
+fn locus_slope(place: Place) -> f32 {
+    match place {
+        Place::Labial | Place::Velar => 0.8,
+        Place::Dental => 0.55,
+        Place::Alveolar | Place::Postalveolar => 0.45,
+        Place::Palatal => 0.3,
+        _ => 1.0,
+    }
+}
 
 pub struct Speaker {
     voice: Voice,
@@ -116,7 +152,11 @@ impl Speaker {
 
     /// Prepares phonemes that are already read, such as from a dictionary, to be rendered from their start.
     pub fn speak_tokens(&mut self, tokens: &[Token]) {
-        let (steps, items) = plan(tokens, self.voice.sample_rate(), self.rate, self.intonation);
+        let mut tokens = tokens.to_vec();
+        if let Some(allophones) = self.language.allophones {
+            allophones(&mut tokens);
+        }
+        let (steps, items) = plan(&tokens, self.voice.sample_rate(), self.rate, self.intonation);
         self.length = steps.iter().map(|s| s.samples).sum();
         self.steps = steps;
         self.items = items;
@@ -179,6 +219,74 @@ impl Speaker {
         self.block = block;
         &self.block
     }
+}
+
+/// Each phone's formant target in its phrase: consonants lean toward the nearest vowel (the next one, or the one
+/// before at a phrase end), and weak vowels fall short toward their neighbors' own targets.
+fn targets(phones: &[Phone], rate: f32) -> Vec<[f32; 3]> {
+    let vowel_near = |i: usize| {
+        phones[i + 1..]
+            .iter()
+            .find(|p| p.phoneme.is_vowel())
+            .map(|p| p.phoneme.formants)
+            .or_else(|| phones[..i].iter().rev().find(|p| p.phoneme.is_vowel()).map(|p| p.phoneme.end))
+    };
+    let mut targets: Vec<[f32; 3]> = phones
+        .iter()
+        .enumerate()
+        .map(|(i, phone)| {
+            let p = phone.phoneme;
+            let mut f = p.formants;
+            if p.is_vowel() || p.kind == Kind::Aspirate {
+                return f;
+            }
+            if let Some(v) = vowel_near(i) {
+                // Approximants keep most of their own shape, which is what makes them heard, and /ɹ/ its low F3.
+                let approximant = p.kind == Kind::Approximant;
+                let slope = locus_slope(p.place) * if approximant { 0.3 } else { 1.0 };
+                f[1] += slope * (v[1] - f[1]);
+                if !approximant {
+                    f[2] += 0.5 * slope * (v[2] - f[2]);
+                }
+            }
+            f
+        })
+        .collect();
+    let speed = rate.sqrt();
+    for i in 0..phones.len() {
+        let (p, stress) = (phones[i].phoneme, phones[i].stress);
+        if p.kind != Kind::Vowel {
+            continue;
+        }
+        let amount = if p.reduced {
+            REDUCED_UNDERSHOOT
+        } else {
+            match stress {
+                0 => UNDERSHOOT,
+                2 => UNDERSHOOT / 3.0,
+                _ => 0.0,
+            }
+        };
+        // Toward a consonant's own locus, not where it leans toward this vowel: a short vowel runs out of time on
+        // its way from one consonant's place to the next.
+        let neighbor = |j: usize| {
+            phones.get(j).map(|n| match (n.phoneme.is_vowel(), j < i) {
+                (true, true) => n.phoneme.end,
+                _ => n.phoneme.formants,
+            })
+        };
+        let neighbors: Vec<[f32; 3]> = [i.checked_sub(1), Some(i + 1)].into_iter().flatten().filter_map(neighbor).collect();
+        if amount == 0.0 || neighbors.is_empty() {
+            continue;
+        }
+        let amount = (amount * speed).min(0.6);
+        // F1 and F2 move toward the neighbors. F3 stays, which keeps /ɚ/ its color.
+        for n in 0..2 {
+            let context = neighbors.iter().map(|f| f[n]).sum::<f32>() / neighbors.len() as f32;
+            targets[i][n] += amount * (context - targets[i][n]);
+        }
+    }
+    targets
 }
 
 struct Phone {
@@ -304,18 +412,34 @@ fn speak_phrase(
     }
 
     let next_vowel = |i: usize| phones[i + 1..].iter().find(|p| p.phoneme.is_vowel());
+    let targets = targets(phones, rate);
+    // The phones of each word, where the text marks words: they share a place in the text.
+    let same_word = |a: &Phone, b: &Phone| a.offset == b.offset && a.len == b.len;
+    let vowels_in_word = |i: usize| {
+        let (mut from, mut to) = (i, i);
+        while from > 0 && same_word(&phones[from - 1], &phones[i]) {
+            from -= 1;
+        }
+        while to + 1 < phones.len() && same_word(&phones[to + 1], &phones[i]) {
+            to += 1;
+        }
+        phones[from..=to].iter().filter(|p| p.phoneme.is_vowel()).count()
+    };
+    let is_consonant = |j: Option<usize>| j.and_then(|j| phones.get(j)).is_some_and(|n| !n.phoneme.is_vowel());
     let mut ranges = Vec::with_capacity(phones.len());
     let mut time = 0_u32;
     for (i, phone) in phones.iter().enumerate() {
         let p = phone.phoneme;
         let lengthen = if last_vowel.is_some_and(|v| i >= v) { FINAL_LENGTHENING } else { 1.0 };
-        let sonorant_ms = |ms: f32| ms * lengthen / rate;
-        let closure_ms = |ms: f32| ms / rate.powf(0.7);
         let next = phones.get(i + 1);
+        let clustered = !p.is_vowel() && p.kind != Kind::Tap && (is_consonant(i.checked_sub(1)) || is_consonant(Some(i + 1)));
+        let cluster = if clustered { IN_CLUSTER } else { 1.0 };
+        let sonorant_ms = |ms: f32| ms * lengthen * cluster / rate;
+        let closure_ms = |ms: f32| ms * cluster / rate.powf(0.7);
         // Where the formants head after a consonant: the next sound's start, or a neutral vowel.
-        let next_formants = next.map_or(NEUTRAL, |n| n.phoneme.formants);
+        let next_formants = if next.is_some() { targets[i + 1] } else { NEUTRAL };
         let after_vowel = next_vowel(i).map_or(NEUTRAL, |n| n.phoneme.formants);
-        let base = Controls { formants: p.formants, pitch_scale: pitch[i], ..Controls::SILENT };
+        let base = Controls { formants: targets[i], pitch_scale: pitch[i], ..Controls::SILENT };
         let from = time;
         let mut push = |ms: f32, controls: Controls, steps: &mut Vec<Step>| {
             let step = Step { samples: samples(ms).max(1), controls };
@@ -329,16 +453,19 @@ fn speak_phrase(
                     2 => 0.8,
                     _ => 1.0,
                 };
-                let ms = sonorant_ms(p.ms * stress);
+                let before_voiceless = next.is_some_and(|n| matches!(n.phoneme.kind, Kind::Plosive | Kind::Affricate | Kind::Fricative) && !n.phoneme.voiced);
+                let timing = if before_voiceless { BEFORE_VOICELESS } else { 1.0 } * if vowels_in_word(i) > 1 { POLYSYLLABIC } else { 1.0 };
+                let ms = sonorant_ms(p.ms * stress * timing);
                 let glide_ms = match i.checked_sub(1).map(|j| phones[j].phoneme.kind) {
                     Some(Kind::Plosive | Kind::Affricate) => 45.0,
+                    Some(Kind::Tap) => 30.0,
                     Some(Kind::Nasal) => 40.0,
                     Some(Kind::Fricative | Kind::Aspirate) => 50.0,
                     Some(Kind::Approximant) => 75.0,
                     Some(Kind::Vowel | Kind::Diphthong) => 90.0,
                     None => 40.0,
                 };
-                let vowel = Controls { formants: p.formants, glide_ms, voicing: 1.0, ..base };
+                let vowel = Controls { glide_ms, voicing: 1.0, ..base };
                 let end_pitch = pitch_end[i];
                 if p.kind == Kind::Diphthong {
                     push(ms * 0.4, vowel, steps);
@@ -359,8 +486,10 @@ fn speak_phrase(
                 let voicing = if p.voiced { 0.25 } else { 0.0 };
                 push(sonorant_ms(p.ms), Controls { glide_ms: 45.0, voicing, frication: p.noise.map(|n| n * level), ..base }, steps);
             }
+            // A quick dip in voicing with the tongue at its place, and no burst.
+            Kind::Tap => push(closure_ms(p.ms), Controls { glide_ms: 15.0, voicing: 0.45, ..base }, steps),
             Kind::Plosive | Kind::Affricate => {
-                let mut locus = p.formants;
+                let mut locus = targets[i];
                 if p.place == Place::Velar {
                     // The tongue back meets the palate where the next vowel needs it: further forward before front
                     // vowels. F2 and F3 come together there (the velar pinch).
@@ -644,6 +773,64 @@ mod tests {
         assert!(s.length() > 0 && !s.transcript().is_empty());
         s.speak("HH AY1", Notation::Arpabet).unwrap();
         assert_eq!(s.transcript(), "");
+    }
+
+    /// F2 at the middle of item `n`.
+    fn f2_at(text: &str, n: usize) -> f32 {
+        let mut s = Speaker::new(SR);
+        s.speak(text, Notation::Arpabet).unwrap();
+        let item = s.items()[n];
+        let mut out = vec![0.0; ((item.start + item.end) / 2) as usize];
+        s.render(&mut out);
+        s.formant(1)
+    }
+
+    fn item_len(text: &str, n: usize) -> u32 {
+        let mut s = Speaker::new(SR);
+        s.speak(text, Notation::Arpabet).unwrap();
+        s.items()[n].end - s.items()[n].start
+    }
+
+    #[test]
+    fn consonants_lean_toward_their_vowel() {
+        // /b/ before "ee" points much higher in F2 than before "oo", as the tongue is already in place.
+        let (front, back) = (f2_at("B IY1 .", 0), f2_at("B UW1 .", 0));
+        assert!(front > back + 500.0, "B before IY {front}, before UW {back}");
+        // /d/ holds its place more than /b/ does.
+        let (d_front, d_back) = (f2_at("D IY1 .", 0), f2_at("D UW1 .", 0));
+        assert!(d_front - d_back < front - back, "D moves {}, B {}", d_front - d_back, front - back);
+    }
+
+    #[test]
+    fn weak_vowels_fall_short_of_their_targets() {
+        // /ɪ/ between /b/s: F2 stays nearer its target stressed than unstressed, which leans toward the lips' low F2.
+        let stressed = f2_at("B IH1 B .", 1);
+        let unstressed = f2_at("B AH1 B IH0 B .", 3);
+        assert!(stressed > unstressed + 100.0, "stressed {stressed}, unstressed {unstressed}");
+    }
+
+    #[test]
+    fn vowels_are_shorter_before_voiceless_consonants() {
+        assert!(item_len("B IH1 T .", 1) < item_len("B IH1 D .", 1) * 9 / 10);
+    }
+
+    #[test]
+    fn consonants_are_shorter_in_clusters() {
+        assert!(item_len("AA1 S T AA1 .", 1) < item_len("AA1 S AA1 .", 1));
+    }
+
+    #[test]
+    fn the_tap_is_short_and_keeps_the_voice_on() {
+        let mut s = Speaker::new(SR);
+        s.set(param::ROUGHNESS, 0.0);
+        s.speak("B AH1 T ER0 .", Notation::Arpabet).unwrap();
+        let mut out = vec![0.0; s.length() as usize];
+        s.render(&mut out);
+        let tap = s.items()[2];
+        let ms = (tap.end - tap.start) as f32 * 1000.0 / SR;
+        assert!(ms < 35.0, "the tap lasts {ms} ms");
+        let voiced = rms(&out[tap.start as usize..tap.end as usize]);
+        assert!(voiced > rms(part(&s, &out, 1)) * 0.2, "the tap is {voiced}");
     }
 
     #[test]

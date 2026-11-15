@@ -22,7 +22,7 @@
         ['W', 'w', 'we'], ['Y', 'j', 'yield'], ['Z', 'z', 'zee'], ['ZH', 'ʒ', 'seizure'],
     ];
     // Sounds only IPA writes as their own symbols (ARPAbet writes them AH0 and ER0), and IPA's marks.
-    const IPA_ONLY = [['ə', 'ə as in about'], ['ɚ', 'ɚ as in butter'], ['ˈ', 'Primary stress, before the stressed syllable'], ['ˌ', 'Secondary stress']];
+    const IPA_ONLY = [['ə', 'ə as in about'], ['ɚ', 'ɚ as in butter'], ['ɾ', 'ɾ as in butter, the tap'], ['ˈ', 'Primary stress, before the stressed syllable'], ['ˌ', 'Secondary stress']];
     // Each example in ARPAbet and in IPA. Both must sound the same.
     const EXAMPLES = [
         ['Hello, world.', 'HH AH0 L OW1 , W ER1 L D .', 'həˈloʊ, ˈwɝld.'],
@@ -210,7 +210,7 @@
 <p class="hint">Each button adds its phoneme at the cursor. Vowels are added stressed.</p>
 <fieldset><legend>Vowels</legend>${chartButtons(VOWELS, true)}</fieldset>
 <fieldset><legend>Consonants</legend>${chartButtons(CONSONANTS, false)}</fieldset>
-<fieldset class="ipa-only" hidden><legend>Reduced vowels and stress</legend>${ipaOnlyButtons}</fieldset>
+<fieldset class="ipa-only" hidden><legend>Reduced vowels, the tap, and stress</legend>${ipaOnlyButtons}</fieldset>
 </details>
 <app-voice-controls></app-voice-controls>
 <style type="text/css">

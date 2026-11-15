@@ -20,6 +20,8 @@ pub enum Kind {
     Affricate,
     /// /h/: breath through the shape of the vowel that follows.
     Aspirate,
+    /// A quick tap of the tongue with the voice still on and no burst, such as the American /ɾ/ in "butter".
+    Tap,
 }
 
 /// Where a consonant is made. It sets the burst's spectrum, and velars move with the vowel that follows.
@@ -128,6 +130,10 @@ pub const fn fricative(ipa: &'static str, place: Place, voiced: bool, formants: 
 
 pub const fn plosive(ipa: &'static str, place: Place, voiced: bool, formants: [f32; 3], closure_ms: f32, vot_ms: f32) -> Phoneme {
     Phoneme { release_ms: vot_ms, ..base(ipa, Kind::Plosive, place, voiced, formants, closure_ms) }
+}
+
+pub const fn tap(ipa: &'static str, place: Place, formants: [f32; 3], ms: f32) -> Phoneme {
+    base(ipa, Kind::Tap, place, true, formants, ms)
 }
 
 pub const fn affricate(ipa: &'static str, place: Place, voiced: bool, formants: [f32; 3], noise: [f32; 6], closure_ms: f32, hiss_ms: f32) -> Phoneme {
