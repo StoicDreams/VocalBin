@@ -56,6 +56,12 @@ pub struct Controls {
     pub nasal_zero: f32,
     /// Pitch as a multiple of the voice's baseline pitch.
     pub pitch_scale: f32,
+    /// Voice quality as a multiple of the voice's `Rd`: above 1 is laxer and breathier, below 1 more pressed.
+    pub rd_scale: f32,
+    /// Breath noise added to the voice's own, 0 to 1.
+    pub breath: f32,
+    /// Vocal fry, 0 to 1: slow, uneven pulses, as at the end of many statements.
+    pub creak: f32,
 }
 
 impl Controls {
@@ -68,6 +74,9 @@ impl Controls {
         frication: [0.0; 6],
         nasal_zero: 0.0,
         pitch_scale: 1.0,
+        rd_scale: 1.0,
+        breath: 0.0,
+        creak: 0.0,
     };
 }
 
@@ -86,6 +95,8 @@ const F6_HZ: f32 = 4900.0;
 const PARALLEL_BANDWIDTHS: [f32; 5] = [150.0, 200.0, 250.0, 300.0, 500.0];
 /// Filters are retuned every this many samples. Formants still glide every sample.
 const CONTROL_SAMPLES: u32 = 8;
+/// Below this voicing level the folds are still, so pitch can jump to where the next voiced sound starts.
+const STILL: f32 = 0.01;
 
 pub struct Voice {
     sample_rate: f32,
@@ -108,6 +119,11 @@ pub struct Voice {
     voicing_now: f32,
     aspiration_now: f32,
     frication_now: [f32; 6],
+    rd_scale_now: f32,
+    breath_now: f32,
+    creak_now: f32,
+    /// Alternates each period, for the uneven pulses of vocal fry.
+    odd_period: bool,
 
     phase: f32,
     phase_step: f32,
@@ -153,6 +169,10 @@ impl Voice {
             voicing_now: 0.0,
             aspiration_now: 0.0,
             frication_now: [0.0; 6],
+            rd_scale_now: 1.0,
+            breath_now: 0.0,
+            creak_now: 0.0,
+            odd_period: false,
             phase: 0.0,
             phase_step: 110.0 / sample_rate,
             pulse_amp: 1.0,
@@ -226,6 +246,9 @@ impl Voice {
         self.voicing_now = self.controls.voicing;
         self.aspiration_now = self.controls.aspiration;
         self.frication_now = self.controls.frication;
+        self.rd_scale_now = self.controls.rd_scale;
+        self.breath_now = self.controls.breath;
+        self.creak_now = self.controls.creak;
         self.control_count = 0;
     }
 
@@ -266,13 +289,19 @@ impl Voice {
     fn start_period(&mut self) {
         let flutter: f32 = self.flutter_phase.iter().map(|p| (p * TAU).sin()).sum();
         let vibrato = self.vibrato * (self.vibrato_phase * TAU).sin();
-        let jitter = self.roughness * 0.03 * self.noise();
-        let f0 = self.pitch_glide.value * (vibrato / 12.0).exp2() * (1.0 + FLUTTER_DEPTH * flutter) * (1.0 + jitter);
+        let creak = self.creak_now;
+        let jitter = (self.roughness * 0.03 + creak * 0.1) * self.noise();
+        // Fry: lower, irregular pulses, every other one weaker and later.
+        self.odd_period = !self.odd_period;
+        let (late, weak) = if self.odd_period { (1.0 + 0.2 * creak, 1.0 - 0.5 * creak) } else { (1.0, 1.0) };
+        let f0 = self.pitch_glide.value * (vibrato / 12.0).exp2() * (1.0 + FLUTTER_DEPTH * flutter) * (1.0 + jitter) * (1.0 - 0.3 * creak) / late;
         self.phase_step = (f0 / self.sample_rate).min(0.25);
-        self.pulse_amp = 1.0 + self.roughness * 0.35 * self.noise();
-        if (self.rd - self.pulse_rd).abs() > 1e-4 {
-            self.pulse = LfPulse::from_rd(self.rd);
-            self.pulse_rd = self.rd;
+        self.pulse_amp = (1.0 + (self.roughness * 0.35 + creak * 0.3) * self.noise()) * weak;
+        // Fry closes the folds tightly, so it pulls the pulse toward pressed.
+        let rd = (self.rd * self.rd_scale_now * (1.0 - 0.4 * creak)).clamp(RD_MIN, RD_MAX);
+        if (rd - self.pulse_rd).abs() > 0.01 {
+            self.pulse = LfPulse::from_rd(rd);
+            self.pulse_rd = rd;
         }
     }
 
@@ -280,7 +309,7 @@ impl Voice {
     fn retune(&mut self) {
         let sr = self.sample_rate;
         // An open glottis loses energy to the lungs, which widens the first formant.
-        let widen = 1.0 + self.breath * 0.8 + (self.rd - 1.0).max(0.0) * 0.3;
+        let widen = 1.0 + (self.breath + self.breath_now) * 0.8 + (self.pulse_rd - 1.0).max(0.0) * 0.3;
         for n in 0..5 {
             let bandwidth = if n == 0 { BANDWIDTHS[0] * widen } else { BANDWIDTHS[n] };
             self.cascade[n].tune(self.formants[n].value, bandwidth, sr);
@@ -309,13 +338,24 @@ impl Voice {
     #[inline]
     pub fn next_sample(&mut self) -> f32 {
         let c = self.controls;
-        self.pitch_glide.step(self.pitch * c.pitch_scale, self.pitch_omega, self.dt);
+        let pitch = self.pitch * c.pitch_scale;
+        if self.voicing_now < STILL && c.voicing < STILL {
+            // Nothing is heard of the pitch while the folds are still, so the next voiced sound starts at its own.
+            self.pitch_glide = Glide::at(pitch);
+        } else {
+            self.pitch_glide.step(pitch, self.pitch_omega, self.dt);
+        }
         self.volume_now += (self.volume - self.volume_now) * self.level_coef;
         self.voicing_now += (c.voicing - self.voicing_now) * self.level_coef;
         self.aspiration_now += (c.aspiration - self.aspiration_now) * self.level_coef;
         for (now, target) in self.frication_now.iter_mut().zip(c.frication) {
             *now += (target - *now) * self.level_coef;
         }
+        // Voice quality changes over a few periods rather than a few ms.
+        let quality_coef = self.level_coef * 0.25;
+        self.rd_scale_now += (c.rd_scale - self.rd_scale_now) * quality_coef;
+        self.breath_now += (c.breath - self.breath_now) * quality_coef;
+        self.creak_now += (c.creak - self.creak_now) * quality_coef;
         self.vibrato_phase = (self.vibrato_phase + VIBRATO_HZ * self.dt).fract();
         for (phase, hz) in self.flutter_phase.iter_mut().zip(FLUTTER_HZ) {
             *phase = (*phase + hz * self.dt).fract();
@@ -339,7 +379,7 @@ impl Voice {
 
         // Breath noise is strongest while the folds are open, as air rushes through the gap.
         let open = self.phase < self.pulse.te;
-        let breath = self.noise() * self.breath * 0.9 * if open { 1.0 } else { 0.35 };
+        let breath = self.noise() * (self.breath + self.breath_now).min(1.0) * 0.9 * if open { 1.0 } else { 0.35 };
         let glottal = (self.pulse.at(self.phase) * self.pulse_amp + breath) * self.voicing_now;
         let aspiration = if self.aspiration_now > 1e-4 { self.noise() * self.aspiration_now * ASPIRATION_GAIN } else { 0.0 };
 

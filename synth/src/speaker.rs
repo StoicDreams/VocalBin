@@ -20,6 +20,10 @@
 //!   duration rules.
 //! - **Variants:** a language can swap sounds for their variants in context first (`Language::allophones`), such as
 //!   the American tap in "butter".
+//! - **Pitch detail (microprosody):** a vowel starts a little higher after a voiceless consonant and a little lower
+//!   after a voiced one, and close vowels such as /i/ sit a little higher than open ones such as /ɑ/.
+//! - **Nasal vowels:** the soft palate lowers before a nasal consonant, so the end of the vowel before it is nasal.
+//! - **Voice quality:** weak vowels are a little breathier, and the end of a statement goes into light vocal fry.
 
 use crate::dictionary::Dictionary;
 use crate::english::{ENGLISH, parse_arpabet};
@@ -57,6 +61,22 @@ const IN_CLUSTER: f32 = 0.8;
 /// /ə/, at normal speed. Secondary stress falls short by a third of the unstressed amount.
 const UNDERSHOOT: f32 = 0.3;
 const REDUCED_UNDERSHOOT: f32 = 0.45;
+/// How much higher a vowel starts after a voiceless consonant, and lower after a voiced one. The voice glides back
+/// within about 100 ms.
+const AFTER_VOICELESS: f32 = 0.06;
+const AFTER_VOICED: f32 = 0.03;
+/// Intrinsic pitch: how much higher a close vowel (F1 near 300 Hz) is than a middle one, and an open one lower.
+const INTRINSIC_PITCH: f32 = 0.025;
+/// The part of a vowel before a nasal consonant that is nasal, and the nasal zero that makes it so. A zero above the
+/// fixed nasal pole adds the low hum and flattens F1, as an open soft palate does.
+const NASAL_PART: f32 = 0.4;
+const NASALIZED_ZERO: f32 = 460.0;
+/// Weak vowels: a laxer pulse and a little more breath.
+const WEAK_RD: f32 = 1.15;
+const WEAK_BREATH: f32 = 0.04;
+/// Vocal fry over the end of a statement's last vowel and what follows it.
+const FINAL_CREAK: f32 = 0.35;
+const CREAK_PART: f32 = 0.4;
 
 /// How far a consonant's F2 moves from its locus toward the vowel next to it: the slope of its locus equation.
 /// The lips leave the tongue free to take the vowel's shape, and the tongue tip holds its own place most.
@@ -411,6 +431,31 @@ fn speak_phrase(
         }
     }
 
+    // Microprosody follows intonation down to monotone, but doesn't grow past its normal size.
+    let detail = intonation.min(1.0);
+    for &v in &vowels {
+        let f1 = phones[v].phoneme.formants[0];
+        let intrinsic = 1.0 + detail * INTRINSIC_PITCH * ((550.0 - f1) / 250.0).clamp(-1.0, 1.0);
+        pitch[v] *= intrinsic;
+        pitch_end[v] *= intrinsic;
+    }
+    for i in 0..phones.len() {
+        let p = phones[i].phoneme;
+        if !matches!(p.kind, Kind::Plosive | Kind::Affricate | Kind::Fricative | Kind::Aspirate) {
+            continue;
+        }
+        // The consonant just before a vowel, or before an approximant and then a vowel, as in "tree" and "play".
+        let vowel = match (phones.get(i + 1), phones.get(i + 2)) {
+            (Some(n), _) if n.phoneme.is_vowel() => i + 1,
+            (Some(n), Some(m)) if n.phoneme.kind == Kind::Approximant && m.phoneme.is_vowel() => i + 2,
+            _ => continue,
+        };
+        let shift = if p.voiced { -AFTER_VOICED } else { AFTER_VOICELESS };
+        pitch[i] = pitch[vowel] * (1.0 + detail * shift);
+    }
+    // A statement's end goes into fry: what follows its last vowel, and the end of that vowel.
+    let creak = if matches!(mark, Some('?') | Some(',')) { 0.0 } else { FINAL_CREAK * detail };
+
     let next_vowel = |i: usize| phones[i + 1..].iter().find(|p| p.phoneme.is_vowel());
     let targets = targets(phones, rate);
     // The phones of each word, where the text marks words: they share a place in the text.
@@ -439,7 +484,8 @@ fn speak_phrase(
         // Where the formants head after a consonant: the next sound's start, or a neutral vowel.
         let next_formants = if next.is_some() { targets[i + 1] } else { NEUTRAL };
         let after_vowel = next_vowel(i).map_or(NEUTRAL, |n| n.phoneme.formants);
-        let base = Controls { formants: targets[i], pitch_scale: pitch[i], ..Controls::SILENT };
+        let after_last = last_vowel.is_some_and(|v| i > v);
+        let base = Controls { formants: targets[i], pitch_scale: pitch[i], creak: if after_last { creak } else { 0.0 }, ..Controls::SILENT };
         let from = time;
         let mut push = |ms: f32, controls: Controls, steps: &mut Vec<Step>| {
             let step = Step { samples: samples(ms).max(1), controls };
@@ -465,17 +511,40 @@ fn speak_phrase(
                     Some(Kind::Vowel | Kind::Diphthong) => 90.0,
                     None => 40.0,
                 };
-                let vowel = Controls { glide_ms, voicing: 1.0, ..base };
+                let weak = p.reduced || phone.stress == 0;
+                let (rd_scale, breath) = if weak { (WEAK_RD, WEAK_BREATH) } else { (1.0, 0.0) };
+                let vowel = Controls { glide_ms, voicing: 1.0, rd_scale, breath, ..base };
                 let end_pitch = pitch_end[i];
-                if p.kind == Kind::Diphthong {
-                    push(ms * 0.4, vowel, steps);
-                    push(ms * 0.6, Controls { formants: p.end, glide_ms: ms * 0.6, pitch_scale: end_pitch, ..vowel }, steps);
+                // The vowel's parts, as where each ends (a share of its length) and what it does.
+                let mut parts = if p.kind == Kind::Diphthong {
+                    vec![(0.4, vowel), (1.0, Controls { formants: p.end, glide_ms: ms * 0.6, pitch_scale: end_pitch, ..vowel })]
                 } else if end_pitch != pitch[i] {
                     // A rise or fall within the vowel.
-                    push(ms * 0.45, vowel, steps);
-                    push(ms * 0.55, Controls { pitch_scale: end_pitch, ..vowel }, steps);
+                    vec![(0.45, vowel), (1.0, Controls { pitch_scale: end_pitch, ..vowel })]
                 } else {
-                    push(ms, vowel, steps);
+                    vec![(1.0, vowel)]
+                };
+                // Splitting a part into two with the same targets doesn't change its glide, so the end of a vowel
+                // can take on nasality or fry partway through any part.
+                let mut from_here = |at: f32, change: &dyn Fn(&mut Controls)| {
+                    if let Some(n) = parts.iter().position(|&(end, _)| end > at) {
+                        let start = if n == 0 { 0.0 } else { parts[n - 1].0 };
+                        if at > start {
+                            parts.insert(n, (at, parts[n].1));
+                        }
+                        parts.iter_mut().filter(|(end, _)| *end > at).for_each(|(_, c)| change(c));
+                    }
+                };
+                if next.is_some_and(|n| n.phoneme.kind == Kind::Nasal) {
+                    from_here(1.0 - NASAL_PART, &|c| c.nasal_zero = NASALIZED_ZERO);
+                }
+                if Some(i) == last_vowel && creak > 0.0 {
+                    from_here(1.0 - CREAK_PART, &|c| c.creak = creak);
+                }
+                let mut start = 0.0;
+                for (end, controls) in parts {
+                    push(ms * (end - start), controls, steps);
+                    start = end;
                 }
             }
             Kind::Approximant => push(sonorant_ms(p.ms), Controls { glide_ms: 50.0, voicing: 0.6, ..base }, steps),
@@ -831,6 +900,81 @@ mod tests {
         assert!(ms < 35.0, "the tap lasts {ms} ms");
         let voiced = rms(&out[tap.start as usize..tap.end as usize]);
         assert!(voiced > rms(part(&s, &out, 1)) * 0.2, "the tap is {voiced}");
+    }
+
+    /// A speaker rendered up to a share of the way through item `n` of ARPAbet `text`.
+    fn speaker_at(text: &str, n: usize, share: f32) -> Speaker {
+        let mut s = Speaker::new(SR);
+        s.speak(text, Notation::Arpabet).unwrap();
+        let item = s.items()[n];
+        let mut out = vec![0.0; (item.start as f32 + (item.end - item.start) as f32 * share) as usize];
+        s.render(&mut out);
+        s
+    }
+
+    #[test]
+    fn vowels_start_higher_after_voiceless_consonants() {
+        let onset = |text: &str| speaker_at(text, 1, 0.1).pitch();
+        let (p, b) = (onset("P AA1 ,"), onset("B AA1 ,"));
+        assert!(p > b * 1.05, "after P {p} Hz, after B {b} Hz");
+        // And the voice settles back by the vowel's end.
+        let end = |text: &str| speaker_at(text, 1, 0.95).pitch();
+        assert!((end("P AA1 ,") - end("B AA1 ,")).abs() < 2.0);
+    }
+
+    #[test]
+    fn close_vowels_sit_higher_than_open_ones() {
+        let middle = |text: &str| speaker_at(text, 1, 0.6).pitch();
+        let (close, open) = (middle("HH IY1 ,"), middle("HH AA1 ,"));
+        assert!(close > open * 1.03, "/i/ {close} Hz, /ɑ/ {open} Hz");
+    }
+
+    #[test]
+    fn vowels_turn_nasal_before_nasals() {
+        let zero = |text: &str, share: f32| speaker_at(text, 1, share).voice.controls().nasal_zero;
+        assert_eq!(zero("B AE1 N .", 0.3), 0.0);
+        assert_eq!(zero("B AE1 N .", 0.9), NASALIZED_ZERO);
+        assert_eq!(zero("B AE1 D .", 0.9), 0.0);
+        // A diphthong too, in its last part.
+        assert_eq!(zero("T AY1 M .", 0.9), NASALIZED_ZERO);
+    }
+
+    #[test]
+    fn weak_vowels_are_breathier() {
+        let quality = |n: usize| *speaker_at("AH0 B AW1 T .", n, 0.5).voice.controls();
+        let (weak, strong) = (quality(0), quality(2));
+        assert!(weak.rd_scale > 1.0 && weak.breath > 0.0);
+        assert_eq!((strong.rd_scale, strong.breath), (1.0, 0.0));
+    }
+
+    #[test]
+    fn statements_end_in_fry_and_questions_do_not() {
+        let creak = |text: &str, n: usize, share: f32| speaker_at(text, n, share).voice.controls().creak;
+        assert!(creak("N OW1 D .", 1, 0.9) > 0.0);
+        assert!(creak("N OW1 D .", 2, 0.5) > 0.0);
+        assert_eq!(creak("N OW1 D .", 1, 0.3), 0.0);
+        assert_eq!(creak("N OW1 D ?", 1, 0.9), 0.0);
+        let mut s = Speaker::new(SR);
+        s.set(param::INTONATION, 0.0);
+        s.speak("N OW1 D .", Notation::Arpabet).unwrap();
+        assert!(s.steps.iter().all(|step| step.controls.creak == 0.0), "monotone has no fry");
+    }
+
+    #[test]
+    fn fry_slows_and_roughens_the_pulses() {
+        // Count the glottal pulses (the sharp negative peaks) in the same steady vowel, with and without fry.
+        let pulses = |creak: f32| {
+            let mut v = Voice::new(SR);
+            v.set(param::ROUGHNESS, 0.0);
+            v.set(param::BREATH, 0.0);
+            v.set_controls(Controls { formants: [700.0, 1200.0, 2500.0], voicing: 1.0, creak, ..Controls::SILENT });
+            v.snap();
+            let out: Vec<f32> = (0..SR as usize).map(|_| v.next_sample()).collect();
+            let low = out.iter().copied().fold(0.0_f32, f32::min);
+            out.windows(2).filter(|w| w[0] > low * 0.3 && w[1] <= low * 0.3).count()
+        };
+        let (modal, fry) = (pulses(0.0), pulses(1.0));
+        assert!(fry < modal * 9 / 10, "{fry} pulses with fry, {modal} without");
     }
 
     #[test]
