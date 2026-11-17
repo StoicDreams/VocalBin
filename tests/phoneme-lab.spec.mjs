@@ -89,6 +89,8 @@ test('speaking faster makes a shorter recording', async ({ page }) => {
 });
 
 test('every phoneme in the chart can be spoken', async ({ page }) => {
+    // Renders all 39 phonemes into one WAV, which can take longer than the usual timeout on a slow or busy machine.
+    test.slow();
     await text(page).fill('');
     await lab(page).getByText('Phoneme chart').click();
     for (const button of await lab(page).locator('[data-symbol]').all()) {
@@ -104,7 +106,8 @@ test('speak plays, then stops by itself or when asked', async ({ page }) => {
     await speak.click();
     await expect(speak).toHaveText('Stop');
     await expect(speak).toHaveAttribute('aria-pressed', 'true');
-    await expect(lab(page).locator('.timeline span.now')).toHaveCount(1);
+    // The button says Stop while the speech renders, and a phoneme is only highlighted once the audio plays.
+    await expect(lab(page).locator('.timeline span.now')).toHaveCount(1, { timeout: 15000 });
     await speak.click();
     await expect(speak).toHaveText('Speak');
     await expect(lab(page).locator('.timeline span.now')).toHaveCount(0);
