@@ -17,6 +17,7 @@ test('places every vowel, with its numbers in a table', async ({ page }) => {
     await expect(heed).toContainText('2322');
 });
 
+// The chart plots each vowel by its formants, so where a vowel sits is the data it shows, not styling, and tests check it.
 test('front vowels sit left and open vowels low, as in the mouth', async ({ page }) => {
     const box = async n => (await point(page, n).boundingBox());
     // 0 is /i/ in "heed", 6 is /ɑ/ in "hod", 10 is /u/ in "who'd".
