@@ -19,7 +19,7 @@ test('shows three voices and eight sliders with their values', async ({ page }) 
 
 test('settings give the synthesizer each parameter number and value', async ({ page }) => {
     // Parameter numbers from vocal_synth::param in synth/src/voice.rs.
-    expect(await settings(page)).toEqual([[0, 110], [1, 17.5], [2, 1], [3, 0.1], [4, 0.15], [7, 0.8], [10, 1], [11, 1]]);
+    await expect.poll(() => settings(page)).toEqual([[0, 110], [1, 17.5], [2, 1], [3, 0.1], [4, 0.15], [7, 0.8], [10, 1], [11, 1]]);
 });
 
 test('presets and sliders change the settings and say so', async ({ page }) => {
@@ -30,11 +30,11 @@ test('presets and sliders change the settings and say so', async ({ page }) => {
     const changes = () => page.evaluate(() => window.voiceChanges);
     await controls(page).getByRole('button', { name: 'Woman' }).click();
     await expect(controls(page).getByRole('slider', { name: 'Pitch' })).toHaveAttribute('aria-valuetext', '210 Hz');
-    expect((await settings(page))[0]).toEqual([0, 210]);
-    expect(await changes()).toBe(1);
+    await expect.poll(async () => (await settings(page))[0]).toEqual([0, 210]);
+    await expect.poll(changes).toBe(1);
     await controls(page).getByRole('slider', { name: 'Speed' }).fill('1.5');
     await expect(controls(page).getByRole('slider', { name: 'Speed' })).toHaveAttribute('aria-valuetext', '1.50×');
-    expect((await settings(page))[6]).toEqual([10, 1.5]);
+    await expect.poll(async () => (await settings(page))[6]).toEqual([10, 1.5]);
     // Playwright's fill sends more than one input event for a slider, so only check that it was heard.
-    expect(await changes()).toBeGreaterThan(1);
+    await expect.poll(changes).toBeGreaterThan(1);
 });

@@ -131,11 +131,16 @@ test('loop repeats the speech and picks up changes on the next pass', async ({ p
     await expect(loop).toHaveAttribute('aria-pressed', 'true');
 
     await text(page).fill('B IY1 .');
+    // The player sends a reading each time a pass is ready to play, so count the passes.
+    await lab(page).locator('app-speech-player').evaluate(player => {
+        window.passes = 0;
+        player.addEventListener('reading', () => window.passes++);
+    });
     await speak.click();
     await expect(status(page)).toHaveText(/^2 phonemes, (\d+\.\d) seconds\.$/);
     const first = await status(page).textContent();
-    // The clip is well under a second, so it is still playing only because it loops.
-    await page.waitForTimeout(2500);
+    // The clip plays once without Loop, so a third pass shows it is repeating.
+    await expect.poll(() => page.evaluate(() => window.passes)).toBeGreaterThanOrEqual(3);
     await expect(speak).toHaveText('Stop');
 
     await slider(page, 'Speed').fill('0.5');
