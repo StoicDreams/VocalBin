@@ -1,5 +1,5 @@
 <webui-data data-page-title="How Speech Is Made" data-page-subtitle="Source, filter, and a synthesizer built from them"></webui-data>
-<webui-data data-page-description="How the voice makes speech: the vocal folds as a source, the vocal tract as a filter, formants and vowels, consonants, and intonation, with a speech synthesizer running on the page to hear each idea."></webui-data>
+<webui-data data-page-description="How speech is made: vocal folds as the source, the vocal tract as a filter, vowels, consonants, and intonation, with a synthesizer to hear each idea."></webui-data>
 
 *By Erik Gassler · November 11, 2026*
 

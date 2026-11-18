@@ -1,4 +1,4 @@
-<webui-data data-page-title="Text to Speech" data-page-subtitle="English, read aloud"></webui-data>
+<webui-data data-page-title="Text to Speech" data-page-subtitle="English, read aloud" data-page-description="Type or paste English and hear it read aloud with each word highlighted. Adjust the voice with sliders and save the speech as a WAV file."></webui-data>
 
 Type or paste English and our speech synthesizer reads it aloud, highlighting each word as it goes. It builds every sound from scratch, with no recordings and no AI. Shape the voice with the sliders, and save what you hear as a WAV file.
 

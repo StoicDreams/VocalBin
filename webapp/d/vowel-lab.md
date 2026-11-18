@@ -1,4 +1,4 @@
-<webui-data data-page-title="Vowel Lab" data-page-subtitle="Shape a voice from scratch"></webui-data>
+<webui-data data-page-title="Vowel Lab" data-page-subtitle="Shape a voice from scratch" data-page-description="Pick a vowel and shape a voice from scratch with pitch, voice quality, and vocal tract length. Hear changes as you drag and record the sound."></webui-data>
 
 We are building a speech synthesizer that makes every sound from scratch. A model of the vocal folds feeds a model of the vocal tract, with no recordings and no AI. This lab is its first stage: pick a vowel, shape the voice, and record what you make.
 

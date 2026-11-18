@@ -1,4 +1,4 @@
-<webui-data data-page-title="{APP_NAME}" data-page-subtitle="Text to speech, built from scratch"></webui-data>
+<webui-data data-page-title="{APP_NAME}" data-page-subtitle="Text to speech, built from scratch" data-page-description="A text to speech synthesizer built from scratch, with no recordings and no AI. Read English aloud, shape the voice, and save the audio as a WAV file."></webui-data>
 
 Type or paste English and our speech synthesizer reads it aloud, highlighting each word as it goes. It builds every sound from scratch, with no recordings and no AI. Shape the voice with the sliders, and save what you hear as a WAV file.
 
