@@ -7,6 +7,8 @@ import { join } from 'node:path';
 
 const BACKGROUND = '#333333';
 const TITLE = '#d10694';
+// The line under the name. Set it from the Share Image page in Task Proxy, which also updates og:image:alt.
+const TAGLINE = "Text to speech, built from scratch";
 
 test.describe.configure({ mode: 'serial' });
 
@@ -30,7 +32,7 @@ background:${BACKGROUND};border-bottom:24px solid ${TITLE};font-family:'Noto San
 <img src="/Logo.svg" alt="" style="width:340px;height:340px;flex:none">
 <div>
 <div style="font-size:96px;font-weight:800;line-height:1.05">Vocal Bin</div>
-<div style="font-size:44px;margin-top:20px;color:${TITLE};font-weight:700">Text to speech, built from scratch</div>
+<div style="font-size:44px;margin-top:20px;color:${TITLE};font-weight:700">${TAGLINE.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
 <div style="font-size:30px;margin-top:28px;opacity:0.85">No recordings. No AI. Every sound made in your browser.</div>
 </div>
 </div></body></html>`);
