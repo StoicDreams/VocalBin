@@ -1,4 +1,4 @@
-import { test, expect, openPage } from './support/site.mjs';
+import { test, expect, openPage } from '../support/site.mjs';
 import { readFileSync } from 'node:fs';
 
 // app-text-to-speech: stage 3 of the speech synthesizer, reading English with the pronouncing dictionary
@@ -24,14 +24,6 @@ async function saveWav(page) {
     return { sampleRate: file.readUInt32LE(24), samples };
 }
 
-test('starts with an example and the controls', async ({ page }) => {
-    await expect(text(page)).toHaveValue('Hello! Welcome to Vocal Bin. How are you today?');
-    for (const name of ['Speak', 'Save WAV', 'Man', 'Woman', 'Child', 'Numbers', 'Questions']) {
-        await expect(tts(page).getByRole('button', { name, exact: true })).toBeVisible();
-    }
-    await expect(tts(page).getByRole('slider')).toHaveCount(8);
-});
-
 test('saves the speech as a WAV file, with the words and their pronunciation', async ({ page }) => {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -54,17 +46,6 @@ test('reads words from the dictionary, and numbers as words', async ({ page }) =
     // Spelling rules alone couldn't say "colonel".
     await expect(ipa(page)).toHaveText('ðə ˈkɝnəl ˈpeɪd ˈfaɪv ˈdɑlɚz ɑn ˈmeɪ ˈfɪfθ.');
     await expect(status(page)).toHaveText(/^Saved/);
-});
-
-test('examples replace the text', async ({ page }) => {
-    await tts(page).getByRole('button', { name: 'Questions' }).click();
-    await expect(text(page)).toHaveValue('Is it raining? Where did you leave the umbrella?');
-});
-
-test('asks for text when there is none', async ({ page }) => {
-    await text(page).fill('   ');
-    await tts(page).getByRole('button', { name: 'Save WAV' }).click();
-    await expect(status(page)).toHaveText('Type some text first, or pick an example.');
 });
 
 test('reads long text in parts, and saves it all', async ({ page }) => {

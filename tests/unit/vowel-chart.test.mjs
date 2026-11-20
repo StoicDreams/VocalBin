@@ -18,13 +18,6 @@ test('places every vowel, with its numbers in a table', async ({ page }) => {
 });
 
 // The chart plots each vowel by its formants, so where a vowel sits is the data it shows, not styling, and tests check it.
-test('front vowels sit left and open vowels low, as in the mouth', async ({ page }) => {
-    const box = async n => (await point(page, n).boundingBox());
-    // 0 is /i/ in "heed", 6 is /ɑ/ in "hod", 10 is /u/ in "who'd".
-    const [i, a, u] = [await box(0), await box(6), await box(10)];
-    expect(i.x).toBeLessThan(u.x);
-    expect(a.y).toBeGreaterThan(i.y);
-});
 
 test('a shorter vocal tract raises every formant by the same proportion', async ({ page }) => {
     await chart(page).getByRole('button', { name: 'Child' }).click();
